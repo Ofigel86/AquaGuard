@@ -1,268 +1,143 @@
-package dev.aquaguard.checks;
+package dev.aquaguard.core;
 
 import dev.aquaguard.AquaGuard;
-import dev.aquaguard.core.DataManager;
-import dev.aquaguard.core.ViolationManager;
-import org.bukkit.GameMode;
-import org.bukkit.Location;
-import org.bukkit.Material;
-import org.bukkit.block.Block;
+import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.EventPriority;
-import org.bukkit.event.Listener;
-import org.bukkit.event.entity.EntityDamageEvent;
-import org.bukkit.event.player.PlayerMoveEvent;
-import org.bukkit.potion.PotionEffect;
-import org.bukkit.potion.PotionEffectType;
 
-public class MovementListener implements Listener {
+import java.io.File;
+import java.io.IOException;
+import java.util.Collections;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class ViolationManager {
     private final AquaGuard plugin;
-    private final DataManager data;
-    private final ViolationManager vl;
+    private final Map<UUID, Map<String, Double>> vls = new ConcurrentHashMap<>();
+    private final File file;
+    private YamlConfiguration yml = new YamlConfiguration();
 
-    public MovementListener(AquaGuard plugin, DataManager data, ViolationManager vl) {
-        this.plugin = plugin; this.data = data; this.vl = vl;
+    public ViolationManager(AquaGuard plugin) {
+        this.plugin = plugin;
+        this.file = new File(plugin.getDataFolder(), "violations.yml");
     }
 
-    @EventHandler
-    public void onMove(PlayerMoveEvent e) {
-        if (e.getTo() == null) return;
-        Player p = e.getPlayer();
+    /**
+     * Добавить VL игроку по конкретной проверке и отправить алерт.
+     */
+    public void add(UUID uuid, String check, double amount, String debug) {
+        Map<String, Double> m = vls.computeIfAbsent(uuid, k -> new ConcurrentHashMap<>());
+        double newVl = m.getOrDefault(check, 0.0) + amount;
+        m.put(check, newVl);
 
-        // игнор телепорты/микро-движения
-        if (e.getFrom().distanceSquared(e.getTo()) < 1e-6) return;
+        // Алерт стаффу
+        String perm = plugin.getConfig().getString("alerts-permission", "ag.alerts");
+        String name = Bukkit.getPlayer(uuid) != null
+                ? Bukkit.getPlayer(uuid).getName()
+                : getOfflineName(uuid);
+        String msg = "AquaGuard | " + name + " flagged " + check
+                + " VL=" + String.format(Locale.US, "%.1f", newVl)
+                + " | " + debug;
 
-        DataManager.PlayerData pd = data.get(p);
+        Bukkit.getOnlinePlayers().stream()
+                .filter(p -> p.hasPermission(perm))
+                .forEach(p -> p.sendMessage(msg));
+    }
 
-        Location from = e.getFrom(), to = e.getTo();
-        double dx = to.getX() - from.getX();
-        double dz = to.getZ() - from.getZ();
-        double dy = to.getY() - from.getY();
-        double horizontal = Math.hypot(dx, dz);
-        boolean onGround = p.isOnGround();
+    private String getOfflineName(UUID uuid) {
+        OfflinePlayer op = Bukkit.getOfflinePlayer(uuid);
+        return op.getName() != null ? op.getName() : uuid.toString();
+    }
 
-        // Air ticks
-        if (!onGround && !p.isFlying() && !p.isGliding()) pd.airTicks++;
-        else pd.airTicks = 0;
+    /**
+     * Автокик по порогу конкретной проверки (если в конфиге задан punish-threshold > 0).
+     */
+    public void maybePunish(UUID uuid, String check) {
+        double threshold = plugin.getConfig().getDouble("checks." + check + ".punish-threshold", 0.0);
+        if (threshold <= 0) return; // автокик отключён
 
-        // NoFall: накапливаем высоту падения (только если реально падаем)
-        if (dy < 0 && !isInLiquid(p) && !p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) {
-            pd.fallDistance += -dy;
-        }
-        // Приземление: ожидать урон (если падение было большим и не на исключениях)
-        if (!pd.lastOnGround && onGround) {
-            if (pd.fallDistance >= plugin.getConfig().getDouble("checks.NoFallA.min-fall", 3.0)
-                    && !isLandingExempt(p)) {
-                pd.awaitingFallDamage = true;
-                pd.landAtMs = System.currentTimeMillis();
+        double cur = vls.getOrDefault(uuid, Collections.emptyMap()).getOrDefault(check, 0.0);
+        if (cur >= threshold) {
+            Player p = Bukkit.getPlayer(uuid);
+            if (p != null) {
+                p.kickPlayer("Kicked by AquaGuard (" + check + ")");
             }
-            pd.fallDistance = 0.0; // сброс при касании земли
         }
-
-        // Checks
-        checkSpeedA(p, pd, horizontal, onGround);
-        updateSpeedWindow(p, pd, horizontal, onGround, p.isSprinting());
-        checkSpeedB(p, pd);
-        checkFlyA(p, pd, dy, onGround);
-        checkNoFallA(p, pd);
-        checkJesusA(p, pd, horizontal);
-
-        // save state
-        pd.lastDeltaY = dy;
-        pd.lastOnGround = onGround;
-        pd.lastLoc = to;
     }
 
-    private void checkSpeedA(Player p, DataManager.PlayerData pd, double horiz, boolean onGround) {
-        if (isExempt(p) || pd.hadRecentVelocity(1200)) { pd.speedStreak = 0; return; }
+    /**
+     * Получить карту VL по всем проверкам для игрока.
+     */
+    public Map<String, Double> get(UUID uuid) {
+        return vls.getOrDefault(uuid, Collections.emptyMap());
+    }
 
-        double walkG = plugin.getConfig().getDouble("checks.SpeedA.ground-walk", 0.215);
-        double sprintG = plugin.getConfig().getDouble("checks.SpeedA.ground-sprint", 0.36);
-        double walkA = plugin.getConfig().getDouble("checks.SpeedA.air-walk", 0.30);
-        double sprintA = plugin.getConfig().getDouble("checks.SpeedA.air-sprint", 0.42);
-        double effPer = plugin.getConfig().getDouble("checks.SpeedA.speed-effect-per-level", 0.06);
-        double margin = plugin.getConfig().getDouble("checks.SpeedA.horizontal-margin", 0.03);
-        int streakToFlag = plugin.getConfig().getInt("checks.SpeedA.streak-to-flag", 2);
-        double addVl = plugin.getConfig().getDouble("checks.SpeedA.add-vl", 1.5);
+    /**
+     * Сумма всех VL игрока (по всем проверкам).
+     */
+    public double total(UUID uuid) {
+        Map<String, Double> m = vls.get(uuid);
+        if (m == null) return 0.0;
+        double s = 0.0;
+        for (double v : m.values()) s += v;
+        return s;
+    }
 
-        boolean sprinting = p.isSprinting();
-        double allowed = onGround ? (sprinting ? sprintG : walkG) : (sprinting ? sprintA : walkA);
-
-        PotionEffect eff = p.getPotionEffect(PotionEffectType.SPEED);
-        if (eff != null) allowed += effPer * (eff.getAmplifier() + 1);
-
-        if (horiz > (allowed + margin)) {
-            if (++pd.speedStreak >= streakToFlag) {
-                flag(p, "SpeedA", addVl,
-                        "h=%.3f > %.3f onGround=%s sprint=%s".formatted(horiz, allowed, onGround, sprinting));
-                pd.speedStreak = streakToFlag;
+    /**
+     * Периодическое «распадение» VL.
+     */
+    public void decayAll(double amount) {
+        if (amount <= 0) return;
+        for (Map<String, Double> m : vls.values()) {
+            // Копию ключей проходить безопаснее
+            for (Map.Entry<String, Double> e : m.entrySet().toArray(new Map.Entry[0])) {
+                double val = Math.max(0.0, e.getValue() - amount);
+                if (val == 0.0) m.remove(e.getKey());
+                else e.setValue(val);
             }
-        } else {
-            pd.speedStreak = Math.max(0, pd.speedStreak - 1);
         }
     }
 
-    private void updateSpeedWindow(Player p, DataManager.PlayerData pd, double h, boolean onGround, boolean sprinting) {
-        long now = System.currentTimeMillis();
-        pd.speedWin.addLast(new DataManager.PlayerData.Sample(now, h, onGround, sprinting));
-        long window = plugin.getConfig().getLong("checks.SpeedB.window-ms", 900);
-        while (!pd.speedWin.isEmpty() && (now - pd.speedWin.getFirst().t) > window) {
-            pd.speedWin.removeFirst();
-        }
-    }
-
-    private void checkSpeedB(Player p, DataManager.PlayerData pd) {
-        if (isExempt(p) || pd.hadRecentVelocity(1200)) { pd.speedBStreak = 0; return; }
-        if (pd.speedWin.size() < 5) return;
-
-        long now = System.currentTimeMillis();
-        long oldest = pd.speedWin.getFirst().t;
-        double secs = Math.max(0.2, (now - oldest) / 1000.0);
-
-        double sumH = 0.0;
-        int air = 0, total = 0, sprintTicks = 0;
-        for (var s : pd.speedWin) {
-            sumH += s.h; total++;
-            if (!s.onGround) air++;
-            if (s.sprinting) sprintTicks++;
-        }
-        double bps = sumH / secs;
-
-        double walkBps = plugin.getConfig().getDouble("checks.SpeedB.walk-bps", 4.4);
-        double sprintBps = plugin.getConfig().getDouble("checks.SpeedB.sprint-bps", 5.9);
-        double jumpBps = plugin.getConfig().getDouble("checks.SpeedB.jump-bps", 7.2);
-        double marginBps = plugin.getConfig().getDouble("checks.SpeedB.margin-bps", 0.25);
-        int streakToFlag = plugin.getConfig().getInt("checks.SpeedB.streak-to-flag", 2);
-        double addVl = plugin.getConfig().getDouble("checks.SpeedB.add-vl", 1.5);
-
-        double airRatio = (total == 0) ? 0.0 : (air / (double) total);
-        boolean mostlySprint = sprintTicks > total / 2;
-        double allowedBps = (airRatio > 0.3) ? jumpBps : (mostlySprint ? sprintBps : walkBps);
-
-        // эффект скорости как множитель (~+20%/ур)
-        var speed = p.getPotionEffect(PotionEffectType.SPEED);
-        if (speed != null) allowedBps *= (1.0 + 0.2 * (speed.getAmplifier() + 1));
-
-        if (bps > (allowedBps + marginBps)) {
-            if (++pd.speedBStreak >= streakToFlag) {
-                flag(p, "SpeedB", addVl,
-                        "bps=%.2f>%.2f air=%.0f%%".formatted(bps, allowedBps, airRatio * 100));
-                pd.speedBStreak = streakToFlag;
-            }
-        } else {
-            pd.speedBStreak = Math.max(0, pd.speedBStreak - 1);
-        }
-    }
-
-    private void checkFlyA(Player p, DataManager.PlayerData pd, double dy, boolean onGround) {
-        if (isExempt(p)) { pd.flyStreak = 0; return; }
-
-        if (!onGround && !p.isFlying() && !p.isGliding() && !isInLiquid(p)) {
-            int maxAir = plugin.getConfig().getInt("checks.FlyA.max-air-ticks", 16);
-            int hoverTicks = plugin.getConfig().getInt("checks.FlyA.hover-threshold-ticks", 5);
-            int streakToFlag = plugin.getConfig().getInt("checks.FlyA.streak-to-flag", 3);
-            double addVl = plugin.getConfig().getDouble("checks.FlyA.add-vl", 1.0);
-
-            boolean hovering = Math.abs(dy) < 1e-3 && pd.airTicks >= hoverTicks;
-
-            if (pd.airTicks > maxAir || hovering) {
-                if (++pd.flyStreak >= streakToFlag) {
-                    flag(p, "FlyA", addVl, "airTicks=%d hover=%s".formatted(pd.airTicks, hovering));
-                    pd.flyStreak = streakToFlag;
+    /**
+     * Загрузка violations.yml
+     */
+    public void load() {
+        if (!file.exists()) return;
+        try {
+            yml.load(file);
+            for (String uid : yml.getKeys(false)) {
+                UUID uuid = UUID.fromString(uid);
+                Map<String, Double> map = new ConcurrentHashMap<>();
+                if (yml.isConfigurationSection(uid)) {
+                    for (String check : Objects.requireNonNull(yml.getConfigurationSection(uid)).getKeys(false)) {
+                        map.put(check, yml.getDouble(uid + "." + check));
+                    }
                 }
-            } else {
-                pd.flyStreak = Math.max(0, pd.flyStreak - 1);
+                vls.put(uuid, map);
             }
-        } else {
-            pd.flyStreak = Math.max(0, pd.flyStreak - 1);
+        } catch (Exception ex) {
+            plugin.getLogger().warning("Failed to load violations.yml: " + ex.getMessage());
         }
     }
 
-    private void checkNoFallA(Player p, DataManager.PlayerData pd) {
-        if (!pd.awaitingFallDamage) return;
-
-        long grace = plugin.getConfig().getLong("checks.NoFallA.grace-ms", 450);
-        if ((System.currentTimeMillis() - pd.landAtMs) < grace) return;
-
-        // если за время «grace» урона не было, и нет исключений — флаг
-        if (!isLandingExempt(p)) {
-            int streakToFlag = plugin.getConfig().getInt("checks.NoFallA.streak-to-flag", 2);
-            double addVl = plugin.getConfig().getDouble("checks.NoFallA.add-vl", 2.0);
-
-            // накапливаем «серии» через повторные приземления без урона
-            // для простоты — одно приземление = один инкремент
-            flag(p, "NoFallA", addVl, "no fall dmg after landing");
-        }
-
-        pd.awaitingFallDamage = false; // сброс
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onDamage(EntityDamageEvent e) {
-        if (!(e.getEntity() instanceof Player p)) return;
-        DataManager.PlayerData pd = data.get(p);
-
-        if (e.getCause() == EntityDamageEvent.DamageCause.FALL) {
-            // получили реальный урон от падения — это норм, снимаем ожидание
-            pd.awaitingFallDamage = false;
-            pd.fallDistance = 0.0;
-        }
-    }
-
-    private void checkJesusA(Player p, DataManager.PlayerData pd, double horiz) {
-        if (!isInLiquid(p)) return;
-        if (p.hasPotionEffect(PotionEffectType.DOLPHINS_GRACE)) return; // легальная быстрая плавучесть
-
-        double swimMax = plugin.getConfig().getDouble("checks.JesusA.swim-max-h", 0.30);
-        double surfaceMax = plugin.getConfig().getDouble("checks.JesusA.surface-max-h", 0.36);
-        double margin = plugin.getConfig().getDouble("checks.JesusA.margin", 0.03);
-        int streakToFlag = plugin.getConfig().getInt("checks.JesusA.streak-to-flag", 3);
-        double addVl = plugin.getConfig().getDouble("checks.JesusA.add-vl", 1.0);
-
-        // грубо: если ноги в воде — лимит ниже; если плывём по поверхности — лимит повыше
-        Material feet = p.getLocation().getBlock().getType();
-        double allowed = (feet == Material.WATER || feet == Material.LAVA) ? swimMax : surfaceMax;
-
-        if (horiz > (allowed + margin)) {
-            // используем speedStreak как общий счётчик для простоты (или заведи отдельный)
-            if (++pd.speedStreak >= streakToFlag) {
-                flag(p, "JesusA", addVl, "h=%.3f > %.3f".formatted(horiz, allowed));
-                pd.speedStreak = streakToFlag;
+    /**
+     * Сохранение violations.yml
+     */
+    public void save() {
+        try {
+            yml = new YamlConfiguration();
+            for (Map.Entry<UUID, Map<String, Double>> e : vls.entrySet()) {
+                for (Map.Entry<String, Double> c : e.getValue().entrySet()) {
+                    yml.set(e.getKey().toString() + "." + c.getKey(), c.getValue());
+                }
             }
+            yml.save(file);
+        } catch (IOException ex) {
+            plugin.getLogger().warning("Failed to save violations.yml: " + ex.getMessage());
         }
-    }
-
-    private void flag(Player p, String check, double addVl, String debug) {
-        vl.add(p.getUniqueId(), check, addVl, debug);
-        vl.maybePunish(p.getUniqueId(), check); // автокик по порогу чека (если настроено)
-    }
-
-    private boolean isExempt(Player p) {
-        if (p.getGameMode() == GameMode.CREATIVE || p.getGameMode() == GameMode.SPECTATOR) return true;
-        if (p.isInsideVehicle() || p.isGliding() || p.isFlying()) return true;
-        if (p.hasPotionEffect(PotionEffectType.LEVITATION) || p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) return true;
-
-        Block feet = p.getLocation().getBlock();
-        String feetName = feet.getType().name();
-        if (feetName.contains("LADDER") || feetName.contains("VINE")) return true;
-
-        Block below = p.getLocation().clone().subtract(0, 1, 0).getBlock();
-        Material bt = below.getType();
-        return bt == Material.SLIME_BLOCK || bt == Material.HONEY_BLOCK || isInLiquid(p);
-    }
-
-    private boolean isInLiquid(Player p) {
-        Material t = p.getLocation().getBlock().getType();
-        return t == Material.WATER || t == Material.LAVA || t == Material.KELP || t == Material.KELP_PLANT;
-    }
-
-    private boolean isLandingExempt(Player p) {
-        // легальные мягкие приземления
-        Material below = p.getLocation().clone().subtract(0, 1, 0).getBlock().getType();
-        if (below == Material.SLIME_BLOCK || below == Material.HONEY_BLOCK || below == Material.HAY_BLOCK) return true;
-        if (isInLiquid(p)) return true;
-        if (p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) return true;
-        return false;
     }
 }
