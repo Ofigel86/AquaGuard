@@ -19,6 +19,11 @@ penalties:
   min-total-vl-hard: 20
   max-ping-ms: 220
 
+setback:
+  enabled: true
+  max-ping-ms: 220
+  cooldown-ms: 400
+
 checks:
   SpeedA:
     ground-sprint: 0.36
@@ -29,7 +34,8 @@ checks:
     horizontal-margin: 0.03
     streak-to-flag: 2
     add-vl: 1.5
-    punish-threshold: 0   # 0 = не кикать
+    punish-threshold: 0
+    setback: "from"     # from | safe | none
 
   SpeedB:
     window-ms: 900
@@ -40,6 +46,7 @@ checks:
     streak-to-flag: 2
     add-vl: 1.5
     punish-threshold: 0
+    setback: "from"
 
   FlyA:
     max-air-ticks: 16
@@ -47,18 +54,21 @@ checks:
     streak-to-flag: 3
     add-vl: 1.0
     punish-threshold: 0
+    setback: "safe"
 
   NoFallA:
-    min-fall: 3.0          # в блоках
-    grace-ms: 450          # окно ожидания урона после приземления
+    min-fall: 3.0
+    grace-ms: 450
     streak-to-flag: 2
     add-vl: 2.0
     punish-threshold: 0
+    setback: "safe"
 
   JesusA:
-    swim-max-h: 0.30       # горизонтальная скорость в воде (м/тик) ~0.30 безопасно
-    surface-max-h: 0.36    # по поверхности воды
+    swim-max-h: 0.30
+    surface-max-h: 0.36
     margin: 0.03
     streak-to-flag: 3
     add-vl: 1.0
     punish-threshold: 0
+    setback: "from"
