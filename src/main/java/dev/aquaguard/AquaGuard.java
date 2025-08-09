@@ -2,8 +2,10 @@ package dev.aquaguard;
 
 import dev.aquaguard.checks.MovementListener;
 import dev.aquaguard.checks.VelocityListener;
+import dev.aquaguard.checks.WorldListener;
 import dev.aquaguard.core.DataManager;
 import dev.aquaguard.core.ViolationManager;
+import dev.aquaguard.gui.GuiManager;
 import dev.aquaguard.owner.OwnerAccess;
 import dev.aquaguard.penalty.PenaltyManager;
 import dev.aquaguard.cmd.AgCommand;
@@ -11,47 +13,64 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 public class AquaGuard extends JavaPlugin {
     private static AquaGuard instance;
+
     private ViolationManager violationManager;
     private DataManager dataManager;
     private PenaltyManager penaltyManager;
     private OwnerAccess ownerAccess;
+    private GuiManager guiManager;
 
     @Override
     public void onEnable() {
         instance = this;
         saveDefaultConfig();
 
+        // Core
         this.violationManager = new ViolationManager(this);
         this.violationManager.load();
 
         this.dataManager = new DataManager();
-
         this.penaltyManager = new PenaltyManager(this, violationManager);
-
         this.ownerAccess = new OwnerAccess(this);
-        getServer().getPluginManager().registerEvents(ownerAccess, this);
 
-        getServer().getPluginManager().registerEvents(dataManager, this);
-        getServer().getPluginManager().registerEvents(new MovementListener(this, dataManager, violationManager), this);
-        getServer().getPluginManager().registerEvents(new VelocityListener(dataManager), this);
-        getServer().getPluginManager().registerEvents(penaltyManager, this);
+        // GUI
+        this.guiManager = new GuiManager(this, violationManager, penaltyManager);
 
+        // Listeners
+        var pm = getServer().getPluginManager();
+        pm.registerEvents(ownerAccess, this);
+        pm.registerEvents(dataManager, this);
+        pm.registerEvents(new MovementListener(this, dataManager, violationManager), this);
+        pm.registerEvents(new VelocityListener(dataManager), this);
+        pm.registerEvents(new WorldListener(this, dataManager, violationManager), this);
+        pm.registerEvents(penaltyManager, this);
+        pm.registerEvents(guiManager, this);
+
+        // Decay VL раз в минуту
         long minute = 20L * 60L;
         getServer().getScheduler().runTaskTimer(this,
                 () -> violationManager.decayAll(getConfig().getDouble("decay-per-minute", 0.5)),
                 minute, minute);
 
+        // Команда /ag
         if (getCommand("ag") != null) {
-            getCommand("ag").setExecutor(new AgCommand(this, violationManager, penaltyManager, ownerAccess));
+            getCommand("ag").setExecutor(new AgCommand(this, violationManager, penaltyManager, ownerAccess, guiManager));
         }
 
-        getLogger().info("AquaGuard test build enabled.");
+        getLogger().info("AquaGuard enabled.");
     }
 
     @Override
     public void onDisable() {
         violationManager.save();
+        getLogger().info("AquaGuard disabled.");
     }
 
     public static AquaGuard get() { return instance; }
+
+    public ViolationManager getViolationManager() { return violationManager; }
+    public DataManager getDataManager() { return dataManager; }
+    public PenaltyManager getPenaltyManager() { return penaltyManager; }
+    public OwnerAccess getOwnerAccess() { return ownerAccess; }
+    public GuiManager getGuiManager() { return guiManager; }
 }
