@@ -4,6 +4,7 @@ import dev.aquaguard.AquaGuard;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
 
 import java.io.File;
 import java.io.IOException;
@@ -34,6 +35,16 @@ public class ViolationManager {
                 });
         String msg = "AquaGuard | " + name + " flagged " + check + " VL=" + String.format(Locale.US, "%.1f", newVl) + " | " + debug;
         Bukkit.getOnlinePlayers().stream().filter(p -> p.hasPermission(perm)).forEach(p -> p.sendMessage(msg));
+    }
+
+    public void maybePunish(UUID uuid, String check) {
+        double threshold = plugin.getConfig().getDouble("checks." + check + ".punish-threshold", 0.0);
+        if (threshold <= 0) return;
+        double cur = vls.getOrDefault(uuid, Collections.emptyMap()).getOrDefault(check, 0.0);
+        if (cur >= threshold) {
+            Player p = Bukkit.getPlayer(uuid);
+            if (p != null) p.kickPlayer("Kicked by AquaGuard (" + check + ")");
+        }
     }
 
     public Map<String, Double> get(UUID uuid) {
