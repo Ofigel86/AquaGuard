@@ -72,3 +72,20 @@ checks:
     add-vl: 1.0
     punish-threshold: 0
     setback: "from"
+    
+   NoSlowA:
+    blocking-walk: 0.20     # допустимая горизонтальная скорость при блоке щитом
+    margin: 0.05
+    streak-to-flag: 3
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "from"
+
+  FastPlaceA:
+    window-ms: 1000
+    cps-limit: 10           # лимит CPS (за 1с) с запасом для легита
+    margin-cps: 1
+    streak-to-flag: 2
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
