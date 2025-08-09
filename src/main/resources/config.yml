@@ -3,12 +3,12 @@ silent-mode: true
 decay-per-minute: 0.5
 
 owner:
-  uuids: []              # сюда авто-привязка добавит твой UUID
+  uuids: []
   auto-claim:
-    enabled: true        # включено до первого успешного входа
-    name: "ТвойНик"     # укажи свой ник
+    enabled: true
+    name: "ТвойНик"
     require-online-mode: true
-  default-bypass: false  # не выдавать обход по умолчанию
+  default-bypass: false
 
 penalties:
   mode: "simulate"       # off | simulate | soft | hard
@@ -23,12 +23,42 @@ checks:
   SpeedA:
     ground-sprint: 0.36
     ground-walk: 0.215
+    air-sprint: 0.42
+    air-walk: 0.30
     speed-effect-per-level: 0.06
-    horizontal-margin: 0.05
-    streak-to-flag: 3
-    add-vl: 1.0
+    horizontal-margin: 0.03
+    streak-to-flag: 2
+    add-vl: 1.5
+    punish-threshold: 0   # 0 = не кикать
+
+  SpeedB:
+    window-ms: 900
+    walk-bps: 4.4
+    sprint-bps: 5.9
+    jump-bps: 7.2
+    margin-bps: 0.25
+    streak-to-flag: 2
+    add-vl: 1.5
+    punish-threshold: 0
+
   FlyA:
     max-air-ticks: 16
     hover-threshold-ticks: 5
     streak-to-flag: 3
     add-vl: 1.0
+    punish-threshold: 0
+
+  NoFallA:
+    min-fall: 3.0          # в блоках
+    grace-ms: 450          # окно ожидания урона после приземления
+    streak-to-flag: 2
+    add-vl: 2.0
+    punish-threshold: 0
+
+  JesusA:
+    swim-max-h: 0.30       # горизонтальная скорость в воде (м/тик) ~0.30 безопасно
+    surface-max-h: 0.36    # по поверхности воды
+    margin: 0.03
+    streak-to-flag: 3
+    add-vl: 1.0
+    punish-threshold: 0
