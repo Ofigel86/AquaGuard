@@ -67,10 +67,4 @@ public class AquaGuard extends JavaPlugin {
     }
 
     public static AquaGuard get() { return instance; }
-
-    public ViolationManager getViolationManager() { return violationManager; }
-    public DataManager getDataManager() { return dataManager; }
-    public PenaltyManager getPenaltyManager() { return penaltyManager; }
-    public OwnerAccess getOwnerAccess() { return ownerAccess; }
-    public GuiManager getGuiManager() { return guiManager; }
 }
