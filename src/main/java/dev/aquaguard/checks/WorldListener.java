@@ -40,10 +40,8 @@ public class WorldListener implements Listener {
         int streakToFlag = plugin.getConfig().getInt("checks.FastPlaceA.streak-to-flag", 2);
         double addVl = plugin.getConfig().getDouble("checks.FastPlaceA.add-vl", 1.0);
 
-        // простая серия через Attribute в PlayerData? используем placeTimes.size() как суррогат streak
         if (cps > (limit + margin)) {
-            // инкрементируем серийно: простейший способ — флагать не чаще раза в окно
-            // для простоты сейчас флагнем сразу (повторно сработает при следующем окне)
+            // Флагнем (простая версия без отдельного стрика)
             vl.add(p.getUniqueId(), "FastPlaceA", addVl, String.format("cps=%.1f > %.1f", cps, limit));
             vl.maybePunish(p.getUniqueId(), "FastPlaceA");
         }
