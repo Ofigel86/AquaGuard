@@ -31,33 +31,32 @@ checks:
     air-sprint: 0.42
     air-walk: 0.30
     speed-effect-per-level: 0.06
-    horizontal-margin: 0.03
-    streak-to-flag: 2
+    horizontal-margin: 0.05
+    streak-to-flag: 3
     add-vl: 1.5
     punish-threshold: 0
-    setback: "from"     # from | safe | none
+    setback: "from"
 
   SpeedB:
     window-ms: 900
     walk-bps: 4.4
     sprint-bps: 5.9
-    jump-bps: 7.2
-    margin-bps: 0.25
+    jump-bps: 7.6
+    margin-bps: 0.40
     streak-to-flag: 2
     add-vl: 1.5
     punish-threshold: 0
     setback: "from"
 
   FlyA:
-    max-air-ticks: 16
-    hover-threshold-ticks: 5
+    hover-threshold-ticks: 7
     streak-to-flag: 3
     add-vl: 1.0
     punish-threshold: 0
     setback: "safe"
 
   NoFallA:
-    min-fall: 3.0
+    min-fall: 4.0       # безопаснее по ложным
     grace-ms: 450
     streak-to-flag: 2
     add-vl: 2.0
@@ -72,9 +71,23 @@ checks:
     add-vl: 1.0
     punish-threshold: 0
     setback: "from"
-    
-   NoSlowA:
-    blocking-walk: 0.20     # допустимая горизонтальная скорость при блоке щитом
+
+  StepA:
+    max-step: 0.6
+    margin: 0.05
+    streak-to-flag: 2
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "from"
+
+  PhaseA:
+    streak-to-flag: 2
+    add-vl: 2.0
+    punish-threshold: 0
+    setback: "safe"
+
+  NoSlowA:
+    blocking-walk: 0.20
     margin: 0.05
     streak-to-flag: 3
     add-vl: 1.0
@@ -83,8 +96,46 @@ checks:
 
   FastPlaceA:
     window-ms: 1000
-    cps-limit: 10           # лимит CPS (за 1с) с запасом для легита
+    cps-limit: 10
     margin-cps: 1
+    streak-to-flag: 2
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+
+  FastBreakA:
+    window-ms: 1000
+    cps-limit: 8
+    margin-cps: 1
+    streak-to-flag: 2
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+
+  ScaffoldA:
+    score-threshold: 6.0
+    add-vl: 1.5
+    setback: "from"
+
+  TowerA:
+    streak-to-flag: 3
+    add-vl: 1.0
+    setback: "from"
+
+  ReachA:
+    base-max: 3.2         # базовая легит дистанция
+    ping-coeff: 0.003     # +м на 1 мс
+    extra-margin: 0.25
+    streak-to-flag: 2
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "none"
+
+  AutoClickerA:
+    window-ms: 3000
+    cps-limit: 14
+    min-std-ms: 35        # слишком ровные интервалы кликов
+    min-samples: 12
     streak-to-flag: 2
     add-vl: 1.0
     punish-threshold: 0
