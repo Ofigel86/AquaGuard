@@ -1,0 +1,12 @@
+name: AquaGuard
+main: dev.aquaguard.AquaGuard
+version: 0.1.0
+api-version: '1.21'
+commands:
+  ag:
+    description: AquaGuard admin
+    usage: /ag <ping|vl|penalties|reload|whoami>
+permissions:
+  ag.admin: true
+  ag.alerts: true
+  ag.bypass: true

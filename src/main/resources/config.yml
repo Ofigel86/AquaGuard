@@ -1,0 +1,34 @@
+alerts-permission: "ag.alerts"
+silent-mode: true
+decay-per-minute: 0.5
+
+owner:
+  uuids: []              # сюда авто-привязка добавит твой UUID
+  auto-claim:
+    enabled: true        # включено до первого успешного входа
+    name: "ТвойНик"     # укажи свой ник
+    require-online-mode: true
+  default-bypass: false  # не выдавать обход по умолчанию
+
+penalties:
+  mode: "simulate"       # off | simulate | soft | hard
+  pvp-only: true
+  soft-scale: 0.75
+  hard-scale: 0.15
+  min-total-vl-soft: 12
+  min-total-vl-hard: 20
+  max-ping-ms: 220
+
+checks:
+  SpeedA:
+    ground-sprint: 0.36
+    ground-walk: 0.215
+    speed-effect-per-level: 0.06
+    horizontal-margin: 0.05
+    streak-to-flag: 3
+    add-vl: 1.0
+  FlyA:
+    max-air-ticks: 16
+    hover-threshold-ticks: 5
+    streak-to-flag: 3
+    add-vl: 1.0
