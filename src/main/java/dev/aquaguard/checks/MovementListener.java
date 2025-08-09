@@ -7,12 +7,14 @@ import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 
@@ -29,8 +31,6 @@ public class MovementListener implements Listener {
     public void onMove(PlayerMoveEvent e) {
         if (e.getTo() == null) return;
         Player p = e.getPlayer();
-
-        // игнор микро-движений/телепортов
         if (e.getFrom().distanceSquared(e.getTo()) < 1e-6) return;
 
         DataManager.PlayerData pd = data.get(p);
@@ -42,20 +42,16 @@ public class MovementListener implements Listener {
         double horizontal = Math.hypot(dx, dz);
         boolean onGround = p.isOnGround();
 
-        // Air ticks
         if (!onGround && !p.isFlying() && !p.isGliding()) pd.airTicks++;
         else pd.airTicks = 0;
 
-        // Обновить "последнюю безопасную наземную позицию"
         updateLastSafeGround(p, pd, to, onGround);
 
-        // NoFall: копим высоту падения во время падения
         if (dy < 0 && !isInLiquid(p) && !p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) {
             pd.fallDistance += -dy;
         }
-        // Приземление
         if (!pd.lastOnGround && onGround) {
-            if (pd.fallDistance >= plugin.getConfig().getDouble("checks.NoFallA.min-fall", 3.0)
+            if (pd.fallDistance >= plugin.getConfig().getDouble("checks.NoFallA.min-fall", 4.0)
                     && !isLandingExempt(p)) {
                 pd.awaitingFallDamage = true;
                 pd.landAtMs = System.currentTimeMillis();
@@ -67,17 +63,16 @@ public class MovementListener implements Listener {
         checkSpeedA(p, pd, horizontal, onGround);
         updateSpeedWindow(p, pd, horizontal, onGround, p.isSprinting());
         checkSpeedB(p, pd);
+        checkNoSlowA(p, pd, horizontal, onGround);
         checkFlyA(p, pd, dy, onGround);
         checkNoFallA(p, pd);
         checkJesusA(p, pd, horizontal);
 
-        // Применить setback, если был запрошен
         if (pd.requestSetback) {
             applySetback(e, p, pd);
             pd.requestSetback = false;
         }
 
-        // save state
         pd.lastOnGround = onGround;
         pd.lastLoc = to;
     }
@@ -86,10 +81,7 @@ public class MovementListener implements Listener {
         if (!onGround) return;
         if (isExempt(p)) return;
         if (isInLiquid(p)) return;
-        // не обновляем во время свежего нокбэка
         if (pd.hadRecentVelocity(300)) return;
-
-        // записываем клон локации (безопасная)
         pd.lastSafeGround = to.clone();
     }
 
@@ -101,8 +93,8 @@ public class MovementListener implements Listener {
         double walkA = plugin.getConfig().getDouble("checks.SpeedA.air-walk", 0.30);
         double sprintA = plugin.getConfig().getDouble("checks.SpeedA.air-sprint", 0.42);
         double effPer = plugin.getConfig().getDouble("checks.SpeedA.speed-effect-per-level", 0.06);
-        double margin = plugin.getConfig().getDouble("checks.SpeedA.horizontal-margin", 0.03);
-        int streakToFlag = plugin.getConfig().getInt("checks.SpeedA.streak-to-flag", 2);
+        double margin = plugin.getConfig().getDouble("checks.SpeedA.horizontal-margin", 0.05);
+        int streakToFlag = plugin.getConfig().getInt("checks.SpeedA.streak-to-flag", 3);
         double addVl = plugin.getConfig().getDouble("checks.SpeedA.add-vl", 1.5);
 
         boolean sprinting = p.isSprinting();
@@ -111,17 +103,33 @@ public class MovementListener implements Listener {
         PotionEffect eff = p.getPotionEffect(PotionEffectType.SPEED);
         if (eff != null) allowed += effPer * (eff.getAmplifier() + 1);
 
+        allowed += envTickBonus(p, onGround);
+
         if (horiz > (allowed + margin)) {
             if (++pd.speedStreak >= streakToFlag) {
                 flag(p, "SpeedA", addVl,
                         String.format("h=%.3f > %.3f onGround=%s sprint=%s", horiz, allowed, onGround, sprinting));
-                // запросить setback согласно конфигу
                 requestSetback(p, pd, plugin.getConfig().getString("checks.SpeedA.setback", "from"));
                 pd.speedStreak = streakToFlag;
             }
         } else {
             pd.speedStreak = Math.max(0, pd.speedStreak - 1);
         }
+    }
+
+    private double envTickBonus(Player p, boolean onGround) {
+        if (!onGround) return 0.0;
+        Material below = p.getLocation().clone().subtract(0, 1, 0).getBlock().getType();
+        if (below == Material.ICE || below == Material.PACKED_ICE || below == Material.FROSTED_ICE) return 0.10;
+        if (below == Material.BLUE_ICE) return 0.14;
+        if ((below == Material.SOUL_SAND || below == Material.SOUL_SOIL)) {
+            var boots = p.getInventory().getBoots();
+            if (boots != null) {
+                int lvl = boots.getEnchantmentLevel(Enchantment.SOUL_SPEED);
+                if (lvl > 0) return 0.08 + 0.04 * (lvl - 1);
+            }
+        }
+        return 0.0;
     }
 
     private void updateSpeedWindow(Player p, DataManager.PlayerData pd, double h, boolean onGround, boolean sprinting) {
@@ -152,27 +160,74 @@ public class MovementListener implements Listener {
 
         double walkBps = plugin.getConfig().getDouble("checks.SpeedB.walk-bps", 4.4);
         double sprintBps = plugin.getConfig().getDouble("checks.SpeedB.sprint-bps", 5.9);
-        double jumpBps = plugin.getConfig().getDouble("checks.SpeedB.jump-bps", 7.2);
-        double marginBps = plugin.getConfig().getDouble("checks.SpeedB.margin-bps", 0.25);
+        double jumpBps = plugin.getConfig().getDouble("checks.SpeedB.jump-bps", 7.6);
+        double marginBps = plugin.getConfig().getDouble("checks.SpeedB.margin-bps", 0.40);
         int streakToFlag = plugin.getConfig().getInt("checks.SpeedB.streak-to-flag", 2);
         double addVl = plugin.getConfig().getDouble("checks.SpeedB.add-vl", 1.5);
 
-        double airRatio = (total == 0) ? 0.0 : (air / (double) total);
+        boolean anyAir = air > 0;
         boolean mostlySprint = sprintTicks > total / 2;
-        double allowedBps = (airRatio > 0.3) ? jumpBps : (mostlySprint ? sprintBps : walkBps);
+        double allowedBps = mostlySprint ? sprintBps : walkBps;
+        if (anyAir) allowedBps = Math.max(allowedBps, jumpBps);
 
         PotionEffect speed = p.getPotionEffect(PotionEffectType.SPEED);
         if (speed != null) allowedBps *= (1.0 + 0.2 * (speed.getAmplifier() + 1));
+        allowedBps *= envBpsMultiplier(p);
+
+        if (isInLiquid(p)) {
+            var boots = p.getInventory().getBoots();
+            int ds = boots != null ? boots.getEnchantmentLevel(Enchantment.DEPTH_STRIDER) : 0;
+            if (ds > 0) allowedBps *= (1.0 + 0.15 * ds);
+            if (p.hasPotionEffect(PotionEffectType.DOLPHINS_GRACE)) allowedBps *= 1.6;
+        }
 
         if (bps > (allowedBps + marginBps)) {
             if (++pd.speedBStreak >= streakToFlag) {
                 flag(p, "SpeedB", addVl,
-                        String.format("bps=%.2f>%.2f air=%.0f%%", bps, allowedBps, airRatio * 100));
+                        String.format("bps=%.2f>%.2f air=%.0f%%", bps, allowedBps, (total == 0 ? 0 : (100.0 * air / total))));
                 requestSetback(p, pd, plugin.getConfig().getString("checks.SpeedB.setback", "from"));
                 pd.speedBStreak = streakToFlag;
             }
         } else {
             pd.speedBStreak = Math.max(0, pd.speedBStreak - 1);
+        }
+    }
+
+    private double envBpsMultiplier(Player p) {
+        Material below = p.getLocation().clone().subtract(0, 1, 0).getBlock().getType();
+        if (below == Material.ICE || below == Material.PACKED_ICE || below == Material.FROSTED_ICE) return 1.25;
+        if (below == Material.BLUE_ICE) return 1.35;
+        if (below == Material.SOUL_SAND || below == Material.SOUL_SOIL) {
+            var boots = p.getInventory().getBoots();
+            int lvl = boots != null ? boots.getEnchantmentLevel(Enchantment.SOUL_SPEED) : 0;
+            if (lvl > 0) return 1.15 + 0.08 * (lvl - 1);
+        }
+        return 1.0;
+    }
+
+    private void checkNoSlowA(Player p, DataManager.PlayerData pd, double horiz, boolean onGround) {
+        // Простая версия: только щит (blocking)
+        if (!onGround) return;
+        if (isInLiquid(p)) return;
+        if (!p.isBlocking()) return; // используем только щит
+        if (isExempt(p) || pd.hadRecentVelocity(1200)) return;
+
+        double allowed = plugin.getConfig().getDouble("checks.NoSlowA.blocking-walk", 0.20);
+        double margin = plugin.getConfig().getDouble("checks.NoSlowA.margin", 0.05);
+        int streakToFlag = plugin.getConfig().getInt("checks.NoSlowA.streak-to-flag", 3);
+        double addVl = plugin.getConfig().getDouble("checks.NoSlowA.add-vl", 1.0);
+
+        PotionEffect eff = p.getPotionEffect(PotionEffectType.SPEED);
+        if (eff != null) allowed += 0.04 * (eff.getAmplifier() + 1); // небольшой бонус при Speed
+
+        if (horiz > (allowed + margin)) {
+            if (++pd.speedStreak >= streakToFlag) {
+                flag(p, "NoSlowA", addVl, String.format("h=%.3f > %.3f (blocking)", horiz, allowed));
+                requestSetback(p, pd, plugin.getConfig().getString("checks.NoSlowA.setback", "from"));
+                pd.speedStreak = streakToFlag;
+            }
+        } else {
+            pd.speedStreak = Math.max(0, pd.speedStreak - 1);
         }
     }
 
@@ -235,13 +290,16 @@ public class MovementListener implements Listener {
         int streakToFlag = plugin.getConfig().getInt("checks.JesusA.streak-to-flag", 3);
         double addVl = plugin.getConfig().getDouble("checks.JesusA.add-vl", 1.0);
 
-        // грубая эвристика: если блок ног — вода/лава, считаем "плавание", иначе "поверхность"
-        Material feet = p.getLocation().getBlock().getType();
-        double allowed = (feet == Material.WATER || feet == Material.LAVA) ? swimMax : surfaceMax;
+        var boots = p.getInventory().getBoots();
+        int ds = boots != null ? boots.getEnchantmentLevel(Enchantment.DEPTH_STRIDER) : 0;
+        double dsBonus = (ds > 0) ? (0.05 * ds) : 0.0;
+
+        double allowed = swimMax + dsBonus;
+        if (p.hasPotionEffect(PotionEffectType.DOLPHINS_GRACE)) allowed += 0.20;
 
         if (horiz > (allowed + margin)) {
             if (++pd.speedStreak >= streakToFlag) {
-                flag(p, "JesusA", addVl, String.format("h=%.3f > %.3f", horiz, allowed));
+                flag(p, "JesusA", addVl, String.format("h=%.3f > %.3f (water)", horiz, allowed));
                 requestSetback(p, pd, plugin.getConfig().getString("checks.JesusA.setback", "from"));
                 pd.speedStreak = streakToFlag;
             }
@@ -250,13 +308,12 @@ public class MovementListener implements Listener {
 
     private void flag(Player p, String check, double addVl, String debug) {
         vl.add(p.getUniqueId(), check, addVl, debug);
-        vl.maybePunish(p.getUniqueId(), check); // автокик по порогу (если настроено)
+        vl.maybePunish(p.getUniqueId(), check);
     }
 
     private void requestSetback(Player p, DataManager.PlayerData pd, String mode) {
         if (!plugin.getConfig().getBoolean("setback.enabled", true)) return;
         if ("none".equalsIgnoreCase(mode)) return;
-
         pd.requestSetback = true;
         pd.preferSafeSetback = "safe".equalsIgnoreCase(mode);
     }
@@ -267,22 +324,17 @@ public class MovementListener implements Listener {
         if ((now - pd.lastSetbackMs) < cd) return;
 
         int maxPing = plugin.getConfig().getInt("setback.max-ping-ms", 220);
-        try {
-            if (p.getPing() > maxPing) return; // не дёргать при высоком пинге
-        } catch (Throwable ignored) {}
+        try { if (p.getPing() > maxPing) return; } catch (Throwable ignored) {}
 
         Location target;
         if (pd.preferSafeSetback && pd.lastSafeGround != null) {
             target = pd.lastSafeGround.clone();
-            // сохраним текущие yaw/pitch, чтобы не крутило камеру
             target.setYaw(e.getTo().getYaw());
             target.setPitch(e.getTo().getPitch());
         } else {
-            // откат к предыдущей позиции (позиция начала этого движения)
             target = e.getFrom().clone();
         }
 
-        // Применяем откат
         e.setTo(target);
         p.setFallDistance(0.0f);
         pd.lastSetbackMs = now;
