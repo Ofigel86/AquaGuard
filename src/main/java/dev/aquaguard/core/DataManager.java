@@ -23,13 +23,12 @@ public class DataManager implements Listener {
     @EventHandler public void onQuit(PlayerQuitEvent e) { data.remove(e.getPlayer().getUniqueId()); }
 
     public static class PlayerData {
-        // Movement
+        // Movement state
         public int airTicks = 0;
         public int speedStreak = 0;
         public int speedBStreak = 0;
         public int flyStreak = 0;
         public long lastVelocityMs = 0L;
-        public double lastDeltaY = 0.0;
         public boolean lastOnGround = true;
         public Location lastLoc = null;
 
@@ -44,9 +43,15 @@ public class DataManager implements Listener {
         public ArrayDeque<Sample> speedWin = new ArrayDeque<>();
 
         // NoFall
-        public double fallDistance = 0.0;     // накопленная "высота падения"
+        public double fallDistance = 0.0;
         public boolean awaitingFallDamage = false;
         public long landAtMs = 0L;
+
+        // Setback
+        public Location lastSafeGround = null;    // последняя безопасная точка на земле
+        public boolean requestSetback = false;    // запросить откат в конце тик-обработки
+        public boolean preferSafeSetback = false; // true → "safe", false → "from"
+        public long lastSetbackMs = 0L;           // кулдаун между откатами
 
         public boolean hadRecentVelocity(long windowMs) {
             return (System.currentTimeMillis() - lastVelocityMs) <= windowMs;
