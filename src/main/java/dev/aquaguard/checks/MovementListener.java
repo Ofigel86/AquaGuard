@@ -22,9 +22,7 @@ public class MovementListener implements Listener {
     private final ViolationManager vl;
 
     public MovementListener(AquaGuard plugin, DataManager data, ViolationManager vl) {
-        this.plugin = plugin;
-        this.data = data;
-        this.vl = vl;
+        this.plugin = plugin; this.data = data; this.vl = vl;
     }
 
     @EventHandler
@@ -48,6 +46,9 @@ public class MovementListener implements Listener {
         if (!onGround && !p.isFlying() && !p.isGliding()) pd.airTicks++;
         else pd.airTicks = 0;
 
+        // Обновить "последнюю безопасную наземную позицию"
+        updateLastSafeGround(p, pd, to, onGround);
+
         // NoFall: копим высоту падения во время падения
         if (dy < 0 && !isInLiquid(p) && !p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) {
             pd.fallDistance += -dy;
@@ -70,9 +71,26 @@ public class MovementListener implements Listener {
         checkNoFallA(p, pd);
         checkJesusA(p, pd, horizontal);
 
+        // Применить setback, если был запрошен
+        if (pd.requestSetback) {
+            applySetback(e, p, pd);
+            pd.requestSetback = false;
+        }
+
         // save state
         pd.lastOnGround = onGround;
         pd.lastLoc = to;
+    }
+
+    private void updateLastSafeGround(Player p, DataManager.PlayerData pd, Location to, boolean onGround) {
+        if (!onGround) return;
+        if (isExempt(p)) return;
+        if (isInLiquid(p)) return;
+        // не обновляем во время свежего нокбэка
+        if (pd.hadRecentVelocity(300)) return;
+
+        // записываем клон локации (безопасная)
+        pd.lastSafeGround = to.clone();
     }
 
     private void checkSpeedA(Player p, DataManager.PlayerData pd, double horiz, boolean onGround) {
@@ -97,6 +115,8 @@ public class MovementListener implements Listener {
             if (++pd.speedStreak >= streakToFlag) {
                 flag(p, "SpeedA", addVl,
                         String.format("h=%.3f > %.3f onGround=%s sprint=%s", horiz, allowed, onGround, sprinting));
+                // запросить setback согласно конфигу
+                requestSetback(p, pd, plugin.getConfig().getString("checks.SpeedA.setback", "from"));
                 pd.speedStreak = streakToFlag;
             }
         } else {
@@ -148,6 +168,7 @@ public class MovementListener implements Listener {
             if (++pd.speedBStreak >= streakToFlag) {
                 flag(p, "SpeedB", addVl,
                         String.format("bps=%.2f>%.2f air=%.0f%%", bps, allowedBps, airRatio * 100));
+                requestSetback(p, pd, plugin.getConfig().getString("checks.SpeedB.setback", "from"));
                 pd.speedBStreak = streakToFlag;
             }
         } else {
@@ -169,6 +190,7 @@ public class MovementListener implements Listener {
             if (pd.airTicks > maxAir || hovering) {
                 if (++pd.flyStreak >= streakToFlag) {
                     flag(p, "FlyA", addVl, String.format("airTicks=%d hover=%s", pd.airTicks, hovering));
+                    requestSetback(p, pd, plugin.getConfig().getString("checks.FlyA.setback", "safe"));
                     pd.flyStreak = streakToFlag;
                 }
             } else {
@@ -185,10 +207,10 @@ public class MovementListener implements Listener {
         long grace = plugin.getConfig().getLong("checks.NoFallA.grace-ms", 450);
         if ((System.currentTimeMillis() - pd.landAtMs) < grace) return;
 
-        // Если урона не было и нет легальных причин — флаг
         if (!isLandingExempt(p)) {
             double addVl = plugin.getConfig().getDouble("checks.NoFallA.add-vl", 2.0);
             flag(p, "NoFallA", addVl, "no fall dmg after landing");
+            requestSetback(p, pd, plugin.getConfig().getString("checks.NoFallA.setback", "safe"));
         }
         pd.awaitingFallDamage = false;
     }
@@ -213,13 +235,14 @@ public class MovementListener implements Listener {
         int streakToFlag = plugin.getConfig().getInt("checks.JesusA.streak-to-flag", 3);
         double addVl = plugin.getConfig().getDouble("checks.JesusA.add-vl", 1.0);
 
-        // Грубо различаем «внутри воды» и «на поверхности»
+        // грубая эвристика: если блок ног — вода/лава, считаем "плавание", иначе "поверхность"
         Material feet = p.getLocation().getBlock().getType();
         double allowed = (feet == Material.WATER || feet == Material.LAVA) ? swimMax : surfaceMax;
 
         if (horiz > (allowed + margin)) {
             if (++pd.speedStreak >= streakToFlag) {
                 flag(p, "JesusA", addVl, String.format("h=%.3f > %.3f", horiz, allowed));
+                requestSetback(p, pd, plugin.getConfig().getString("checks.JesusA.setback", "from"));
                 pd.speedStreak = streakToFlag;
             }
         }
@@ -227,7 +250,42 @@ public class MovementListener implements Listener {
 
     private void flag(Player p, String check, double addVl, String debug) {
         vl.add(p.getUniqueId(), check, addVl, debug);
-        vl.maybePunish(p.getUniqueId(), check); // автокик, если порог для проверки задан в конфиге
+        vl.maybePunish(p.getUniqueId(), check); // автокик по порогу (если настроено)
+    }
+
+    private void requestSetback(Player p, DataManager.PlayerData pd, String mode) {
+        if (!plugin.getConfig().getBoolean("setback.enabled", true)) return;
+        if ("none".equalsIgnoreCase(mode)) return;
+
+        pd.requestSetback = true;
+        pd.preferSafeSetback = "safe".equalsIgnoreCase(mode);
+    }
+
+    private void applySetback(PlayerMoveEvent e, Player p, DataManager.PlayerData pd) {
+        long now = System.currentTimeMillis();
+        long cd = plugin.getConfig().getLong("setback.cooldown-ms", 400);
+        if ((now - pd.lastSetbackMs) < cd) return;
+
+        int maxPing = plugin.getConfig().getInt("setback.max-ping-ms", 220);
+        try {
+            if (p.getPing() > maxPing) return; // не дёргать при высоком пинге
+        } catch (Throwable ignored) {}
+
+        Location target;
+        if (pd.preferSafeSetback && pd.lastSafeGround != null) {
+            target = pd.lastSafeGround.clone();
+            // сохраним текущие yaw/pitch, чтобы не крутило камеру
+            target.setYaw(e.getTo().getYaw());
+            target.setPitch(e.getTo().getPitch());
+        } else {
+            // откат к предыдущей позиции (позиция начала этого движения)
+            target = e.getFrom().clone();
+        }
+
+        // Применяем откат
+        e.setTo(target);
+        p.setFallDistance(0.0f);
+        pd.lastSetbackMs = now;
     }
 
     private boolean isExempt(Player p) {
