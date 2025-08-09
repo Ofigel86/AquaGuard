@@ -42,12 +42,15 @@ public class MovementListener implements Listener {
         double horizontal = Math.hypot(dx, dz);
         boolean onGround = p.isOnGround();
 
+        // Air ticks
         if (!onGround && !p.isFlying() && !p.isGliding()) pd.airTicks++;
         else pd.airTicks = 0;
 
+        // последняя безопасная наземная позиция
         updateLastSafeGround(p, pd, to, onGround);
 
-        if (dy < 0 && !isInLiquid(p) && !p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) {
+        // NoFall накопление падения
+        if (dy < 0 && !isInOrNearLiquid(p) && !p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) {
             pd.fallDistance += -dy;
         }
         if (!pd.lastOnGround && onGround) {
@@ -68,11 +71,13 @@ public class MovementListener implements Listener {
         checkNoFallA(p, pd);
         checkJesusA(p, pd, horizontal);
 
+        // setback
         if (pd.requestSetback) {
             applySetback(e, p, pd);
             pd.requestSetback = false;
         }
 
+        // save state
         pd.lastOnGround = onGround;
         pd.lastLoc = to;
     }
@@ -80,7 +85,7 @@ public class MovementListener implements Listener {
     private void updateLastSafeGround(Player p, DataManager.PlayerData pd, Location to, boolean onGround) {
         if (!onGround) return;
         if (isExempt(p)) return;
-        if (isInLiquid(p)) return;
+        if (isInOrNearLiquid(p)) return;
         if (pd.hadRecentVelocity(300)) return;
         pd.lastSafeGround = to.clone();
     }
@@ -174,7 +179,7 @@ public class MovementListener implements Listener {
         if (speed != null) allowedBps *= (1.0 + 0.2 * (speed.getAmplifier() + 1));
         allowedBps *= envBpsMultiplier(p);
 
-        if (isInLiquid(p)) {
+        if (isInOrNearLiquid(p)) {
             var boots = p.getInventory().getBoots();
             int ds = boots != null ? boots.getEnchantmentLevel(Enchantment.DEPTH_STRIDER) : 0;
             if (ds > 0) allowedBps *= (1.0 + 0.15 * ds);
@@ -206,10 +211,9 @@ public class MovementListener implements Listener {
     }
 
     private void checkNoSlowA(Player p, DataManager.PlayerData pd, double horiz, boolean onGround) {
-        // Простая версия: только щит (blocking)
         if (!onGround) return;
-        if (isInLiquid(p)) return;
-        if (!p.isBlocking()) return; // используем только щит
+        if (isInOrNearLiquid(p)) return;
+        if (!p.isBlocking()) return;
         if (isExempt(p) || pd.hadRecentVelocity(1200)) return;
 
         double allowed = plugin.getConfig().getDouble("checks.NoSlowA.blocking-walk", 0.20);
@@ -218,7 +222,7 @@ public class MovementListener implements Listener {
         double addVl = plugin.getConfig().getDouble("checks.NoSlowA.add-vl", 1.0);
 
         PotionEffect eff = p.getPotionEffect(PotionEffectType.SPEED);
-        if (eff != null) allowed += 0.04 * (eff.getAmplifier() + 1); // небольшой бонус при Speed
+        if (eff != null) allowed += 0.04 * (eff.getAmplifier() + 1);
 
         if (horiz > (allowed + margin)) {
             if (++pd.speedStreak >= streakToFlag) {
@@ -231,20 +235,31 @@ public class MovementListener implements Listener {
         }
     }
 
+    // ВАЖНО: обновлённая логика FlyA без "max-air"
     private void checkFlyA(Player p, DataManager.PlayerData pd, double dy, boolean onGround) {
         if (isExempt(p)) { pd.flyStreak = 0; return; }
 
-        if (!onGround && !p.isFlying() && !p.isGliding() && !isInLiquid(p)) {
-            int maxAir = plugin.getConfig().getInt("checks.FlyA.max-air-ticks", 16);
-            int hoverTicks = plugin.getConfig().getInt("checks.FlyA.hover-threshold-ticks", 5);
+        boolean liquid = isInOrNearLiquid(p);
+
+        // Проверяем только "подозрительное зависание". Естественное падение — игнор.
+        if (!onGround && !p.isFlying() && !p.isGliding() && !liquid) {
+            int hoverTicks = plugin.getConfig().getInt("checks.FlyA.hover-threshold-ticks", 7);
             int streakToFlag = plugin.getConfig().getInt("checks.FlyA.streak-to-flag", 3);
             double addVl = plugin.getConfig().getDouble("checks.FlyA.add-vl", 1.0);
 
-            boolean hovering = Math.abs(dy) < 1e-3 && pd.airTicks >= hoverTicks;
+            boolean falling = dy < -0.08 || pd.fallDistance > 1.5;
+            if (falling) { // естественное падение — НЕ флагать
+                pd.flyStreak = Math.max(0, pd.flyStreak - 1);
+                return;
+            }
 
-            if (pd.airTicks > maxAir || hovering) {
+            boolean hovering = Math.abs(dy) < 0.003
+                    && pd.airTicks >= hoverTicks
+                    && !pd.hadRecentVelocity(800);
+
+            if (hovering) {
                 if (++pd.flyStreak >= streakToFlag) {
-                    flag(p, "FlyA", addVl, String.format("airTicks=%d hover=%s", pd.airTicks, hovering));
+                    flag(p, "FlyA", addVl, String.format("hover airTicks=%d", pd.airTicks));
                     requestSetback(p, pd, plugin.getConfig().getString("checks.FlyA.setback", "safe"));
                     pd.flyStreak = streakToFlag;
                 }
@@ -281,7 +296,8 @@ public class MovementListener implements Listener {
     }
 
     private void checkJesusA(Player p, DataManager.PlayerData pd, double horiz) {
-        if (!isInLiquid(p)) return;
+        // Запускаем только когда реально в воде (а не над водой)
+        if (!isInWater(p)) return;
         if (p.hasPotionEffect(PotionEffectType.DOLPHINS_GRACE)) return;
 
         double swimMax = plugin.getConfig().getDouble("checks.JesusA.swim-max-h", 0.30);
@@ -351,18 +367,39 @@ public class MovementListener implements Listener {
 
         Block below = p.getLocation().clone().subtract(0, 1, 0).getBlock();
         Material bt = below.getType();
-        return bt == Material.SLIME_BLOCK || bt == Material.HONEY_BLOCK || isInLiquid(p);
+        return bt == Material.SLIME_BLOCK || bt == Material.HONEY_BLOCK || isInOrNearLiquid(p);
     }
 
-    private boolean isInLiquid(Player p) {
-        Material t = p.getLocation().getBlock().getType();
-        return t == Material.WATER || t == Material.LAVA || t == Material.KELP || t == Material.KELP_PLANT;
+    // ==== Жидкости / вода ====
+    private boolean isInOrNearLiquid(Player p) {
+        Block feet = p.getLocation().getBlock();
+        Block below = p.getLocation().clone().subtract(0, 1, 0).getBlock();
+        return isLiquidLike(feet) || isLiquidLike(below);
+    }
+    private boolean isInWater(Player p) {
+        Block feet = p.getLocation().getBlock();
+        return isWaterLike(feet);
+    }
+    private boolean isLiquidLike(Block b) {
+        if (b.isLiquid()) return true;
+        Material t = b.getType();
+        if (t == Material.LAVA) return true;
+        return isWaterLike(b);
+    }
+    private boolean isWaterLike(Block b) {
+        Material t = b.getType();
+        return t == Material.WATER
+                || t == Material.BUBBLE_COLUMN
+                || t == Material.KELP
+                || t == Material.KELP_PLANT
+                || t == Material.SEAGRASS
+                || t == Material.TALL_SEAGRASS;
     }
 
     private boolean isLandingExempt(Player p) {
         Material below = p.getLocation().clone().subtract(0, 1, 0).getBlock().getType();
         if (below == Material.SLIME_BLOCK || below == Material.HONEY_BLOCK || below == Material.HAY_BLOCK) return true;
-        if (isInLiquid(p)) return true;
+        if (isInOrNearLiquid(p)) return true;
         if (p.hasPotionEffect(PotionEffectType.SLOW_FALLING)) return true;
         return false;
     }
