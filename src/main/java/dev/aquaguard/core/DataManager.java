@@ -48,10 +48,13 @@ public class DataManager implements Listener {
         public long landAtMs = 0L;
 
         // Setback
-        public Location lastSafeGround = null;    // последняя безопасная точка на земле
-        public boolean requestSetback = false;    // запросить откат в конце тик-обработки
-        public boolean preferSafeSetback = false; // true → "safe", false → "from"
-        public long lastSetbackMs = 0L;           // кулдаун между откатами
+        public Location lastSafeGround = null;
+        public boolean requestSetback = false;
+        public boolean preferSafeSetback = false;
+        public long lastSetbackMs = 0L;
+
+        // FastPlace window (для WorldListener)
+        public ArrayDeque<Long> placeTimes = new ArrayDeque<>();
 
         public boolean hadRecentVelocity(long windowMs) {
             return (System.currentTimeMillis() - lastVelocityMs) <= windowMs;
