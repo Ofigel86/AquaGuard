@@ -7,7 +7,6 @@ import dev.aquaguard.core.ViolationManager;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
-import org.bukkit.attribute.Attribute;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
@@ -42,95 +41,72 @@ public class CombatListener implements Listener {
         this.bypass = bypass;
     }
 
-    // ====== PvP: основное событие урона ======
+    // ===== PvP: основное событие урона =====
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onHit(EntityDamageByEntityEvent e) {
         Player attacker = attackerOf(e.getDamager());
         if (attacker == null) return;
         if (!(e.getEntity() instanceof Player victim)) return;
-
         if (bypass.isBypassed(attacker.getUniqueId())) return;
 
         long now = System.currentTimeMillis();
-
-        // Обновим метки "бой" (используется для иммуницетов в других чеках, например SpeedB)
         var pad = data.get(attacker);
         var pvd = data.get(victim);
         pad.lastCombatMs = now;
         pvd.lastCombatMs = now;
 
-        // Сохраним время удара (для интервалов/кулдаунов)
+        // окно интервалов ударов (для AttackIntervalB/ACoolA)
         pad.attackTimes.addLast(now);
         long atkWindow = Math.max(2000L, plugin.getConfig().getLong("checks.AutoClickerA.window-ms", 3000));
         while (!pad.attackTimes.isEmpty() && (now - pad.attackTimes.getFirst()) > atkWindow) {
             pad.attackTimes.removeFirst();
         }
 
-        // ===== KillAura / TPAura сигналы =====
-        // ReachA (консервативный)
-        if (checks.enabled("ReachA")) {
-            checkReachA(attacker, victim);
+        // KA/TPAura сигналы
+        if (checks.enabled("ReachA")) checkReachA(attacker, victim);
+        if (checks.enabled("WallHitA") && !attacker.hasLineOfSight(victim)) {
+            flag(attacker, "WallHitA", plugin.getConfig().getDouble("checks.WallHitA.add-vl", 1.0), "no LOS");
         }
-        // WallHitA (LOS отсутствует)
-        if (checks.enabled("WallHitA")) {
-            if (!attacker.hasLineOfSight(victim)) {
-                flag(attacker, "WallHitA", plugin.getConfig().getDouble("checks.WallHitA.add-vl", 1.0), "no LOS");
-            }
-        }
-        // AttackCooldownA (очень простой безопасный)
-        if (checks.enabled("AttackCooldownA")) {
-            checkAttackCooldownA(attacker);
-        }
-        // IntervalB (интервалы ударов слишком ровные — лайтово)
-        if (checks.enabled("AttackIntervalB")) {
-            checkAttackIntervalB(attacker);
-        }
-        // AimSnapA (резкие снепы у удара, консервативно)
-        if (checks.enabled("AimSnapA")) {
-            checkAimSnapA(attacker, victim, now);
-        }
-        // TargetSwitchC (быстрый свич цели + "идеальный" угол)
-        if (checks.enabled("TargetSwitchC")) {
-            checkTargetSwitchC(attacker, victim, now);
-        }
+        if (checks.enabled("AttackCooldownA")) checkAttackCooldownA(attacker);
+        if (checks.enabled("AttackIntervalB")) checkAttackIntervalB(attacker);
+        if (checks.enabled("AimSnapA")) checkAimSnapA(attacker, victim, now);
+        if (checks.enabled("TargetSwitchC")) checkTargetSwitchC(attacker, victim, now);
     }
 
-    // ===== AutoTotem: сбор и флаги =====
+    // ===== AutoTotem: триггеры =====
 
-    // Быстрый swap в offhand клавишей F
+    // Swap (F) — быстрый перенос тотема в offhand
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onSwap(PlayerSwapHandItemsEvent e) {
         Player p = e.getPlayer();
         if (bypass.isBypassed(p.getUniqueId())) return;
 
-        // После свопа предмет из main hand окажется в offhand
         ItemStack main = e.getMainHandItem();
         if (main != null && main.getType() == Material.TOTEM_OF_UNDYING) {
             var pd = data.get(p);
             pd.lastOffhandTotemMs = System.currentTimeMillis();
-            pd.lastOffhandByInventoryMs = 0L; // swap, не инвентарь
+            pd.lastOffhandByInventoryMs = 0L;
         }
     }
 
-    // Быстрый перенос тотема в offhand через инвентарь
+    // Инвентарь — перенос тотема в offhand через GUI
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onClick(InventoryClickEvent e) {
         if (!(e.getWhoClicked() instanceof Player p)) return;
         if (bypass.isBypassed(p.getUniqueId())) return;
 
-        // На следующий тик проверим offhand
         Bukkit.getScheduler().runTask(plugin, () -> {
             ItemStack off = p.getInventory().getItem(EquipmentSlot.OFF_HAND);
             if (off != null && off.getType() == Material.TOTEM_OF_UNDYING) {
                 var pd = data.get(p);
                 long now = System.currentTimeMillis();
                 pd.lastOffhandTotemMs = now;
-                pd.lastOffhandByInventoryMs = now; // помечаем, что пришло через инвентарь
+                pd.lastOffhandByInventoryMs = now;
             }
         });
     }
 
-    // Помечаем "низкое HP" для паттернов автототема
+    // Отметка «низкое HP» для автототема
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onDamage(EntityDamageEvent e) {
         if (!(e.getEntity() instanceof Player p)) return;
@@ -143,7 +119,7 @@ public class CombatListener implements Listener {
         }
     }
 
-    // Собственно "воскрешение тотемом"
+    // Само воскрешение — анализ паттернов автототема
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
     public void onResurrect(EntityResurrectEvent e) {
         if (!(e.getEntity() instanceof Player p)) return;
@@ -152,7 +128,6 @@ public class CombatListener implements Listener {
         var pd = data.get(p);
         long now = System.currentTimeMillis();
 
-        // быстрая серия воскрешений — окно
         pd.resurrectTimes.addLast(now);
         long repWin = Math.max(10 * 60_000L, plugin.getConfig().getLong("checks.AutoTotem.repeat-window-ms", 10 * 60_000L));
         while (!pd.resurrectTimes.isEmpty() && (now - pd.resurrectTimes.getFirst()) > repWin) {
@@ -164,13 +139,10 @@ public class CombatListener implements Listener {
         boolean cameFromInv = (pd.lastOffhandByInventoryMs > 0) && ((now - pd.lastOffhandByInventoryMs) <= quickSwap);
         boolean lowHpSwap = (pd.lastLowHpMs > 0) && ((now - pd.lastLowHpMs) <= Math.max(300, quickSwap + 100));
 
-        // A: «тотем появился в offhand прямо перед воскрешением»
         if (checks.enabled("AutoTotemA") && (justSwapped || cameFromInv)) {
             flag(p, "AutoTotemA", plugin.getConfig().getDouble("checks.AutoTotem.AutoTotemA.add-vl", 1.0),
                     "quick-swap=" + (now - pd.lastOffhandTotemMs) + "ms inv=" + cameFromInv);
         }
-
-        // B: много «быстрых» воскрешений в окне
         if (checks.enabled("AutoTotemB")) {
             int minQuick = plugin.getConfig().getInt("checks.AutoTotem.AutoTotemB.min-quick-uses", 3);
             int quickCount = 0;
@@ -182,19 +154,16 @@ public class CombatListener implements Listener {
                         "quick-uses=" + quickCount);
             }
         }
-
-        // C: «низкое hp» → мгновенный offhand‑тотем (паттерн)
         if (checks.enabled("AutoTotemC") && lowHpSwap && justSwapped) {
             flag(p, "AutoTotemC", plugin.getConfig().getDouble("checks.AutoTotem.AutoTotemC.add-vl", 1.0),
                     "lowHP→swap " + (now - pd.lastLowHpMs) + "ms");
         }
     }
 
-    // ===== реализация отдельных PvP-сигналов =====
-
+    // ===== Реализация PvP-сигналов =====
     private void checkReachA(Player attacker, Player victim) {
         Location ae = attacker.getEyeLocation();
-        Location vc = victim.getLocation().add(0.0, 0.9, 0.0); // центр туловища
+        Location vc = victim.getLocation().add(0.0, 0.9, 0.0);
         double dist = ae.distance(vc);
 
         double baseMax = plugin.getConfig().getDouble("checks.ReachA.base-max", 3.2);
@@ -204,8 +173,8 @@ public class CombatListener implements Listener {
         int ping = 0;
         try { ping = attacker.getPing(); } catch (Throwable ignored) {}
         ping = Math.max(0, Math.min(300, ping));
-        double allowed = baseMax + pingCoeff * ping + extra;
 
+        double allowed = baseMax + pingCoeff * ping + extra;
         if (dist > allowed) {
             flag(attacker, "ReachA", plugin.getConfig().getDouble("checks.ReachA.add-vl", 1.5),
                     String.format("dist=%.2f>%.2f", dist, allowed));
@@ -215,12 +184,9 @@ public class CombatListener implements Listener {
     private void checkAttackCooldownA(Player attacker) {
         var pd = data.get(attacker);
         if (pd.attackTimes.size() < 2) return;
-        long now = System.currentTimeMillis();
-        long last = pd.attackTimes.getLast();
-        long prev = pd.attackTimes.size() >= 2 ? new ArrayList<>(pd.attackTimes).get(pd.attackTimes.size() - 2) : 0L;
-        long dt = last - prev;
+        var arr = new ArrayList<>(pd.attackTimes);
+        long dt = arr.get(arr.size() - 1) - arr.get(arr.size() - 2);
 
-        // Очень консервативный порог для «ранних» ударов
         long minMs = plugin.getConfig().getLong("checks.AttackCooldownA.min-ms", 220);
         if (dt > 0 && dt < minMs) {
             flag(attacker, "AttackCooldownA", plugin.getConfig().getDouble("checks.AttackCooldownA.add-vl", 0.5),
@@ -235,12 +201,13 @@ public class CombatListener implements Listener {
         var arr = new ArrayList<>(pd.attackTimes);
         double[] iv = new double[arr.size() - 1];
         for (int i = 1; i < arr.size(); i++) iv[i - 1] = (arr.get(i) - arr.get(i - 1));
+
         double mean = 0.0; for (double v : iv) mean += v; mean /= iv.length;
         double var = 0.0; for (double v : iv) var += (v - mean) * (v - mean); var /= iv.length;
         double std = Math.sqrt(var);
 
-        double cps = iv.length / (Math.max(0.2, (arr.getLast() - arr.getFirst()) / 1000.0));
-        if (cps < plugin.getConfig().getDouble("checks.AttackIntervalB.min-cps", 6.0)) return; // только при заметном темпе
+        double cps = iv.length / (Math.max(0.2, (arr.get(arr.size() - 1) - arr.get(0)) / 1000.0));
+        if (cps < plugin.getConfig().getDouble("checks.AttackIntervalB.min-cps", 6.0)) return;
 
         double maxStd = plugin.getConfig().getDouble("checks.AttackIntervalB.max-std-ms", 50.0);
         if (std < maxStd) {
@@ -254,12 +221,10 @@ public class CombatListener implements Listener {
         float yaw = attacker.getLocation().getYaw();
         float pitch = attacker.getLocation().getPitch();
 
-        // сравним с прошлым "хитовым" углом
         long dt = (pd.lastHitMs > 0) ? (now - pd.lastHitMs) : 9999;
         double dYaw = angleDiff(pd.lastHitYaw, yaw);
         double dPitch = Math.abs(pd.lastHitPitch - pitch);
 
-        // Резкий снеп за короткий dt
         long maxWindow = plugin.getConfig().getLong("checks.AimSnapA.window-ms", 150);
         double yawThr = plugin.getConfig().getDouble("checks.AimSnapA.max-dyaw", 120.0);
         double pitchThr = plugin.getConfig().getDouble("checks.AimSnapA.max-dpitch", 60.0);
@@ -269,7 +234,6 @@ public class CombatListener implements Listener {
                     String.format("dYaw=%.0f dPitch=%.0f dt=%dms", dYaw, dPitch, dt));
         }
 
-        // обновим "хитовый" угол
         pd.lastHitYaw = yaw;
         pd.lastHitPitch = pitch;
         pd.lastHitMs = now;
@@ -281,9 +245,9 @@ public class CombatListener implements Listener {
         if (pd.lastTarget != null && !pd.lastTarget.equals(vid)) {
             pd.lastTargetSwitchMs = now;
         }
-        // если очень быстро после свича цели произошёл удар + «идеально» наведён
         long dt = (pd.lastTargetSwitchMs > 0) ? (now - pd.lastTargetSwitchMs) : 9999;
         long max = plugin.getConfig().getLong("checks.TargetSwitchC.max-ms", 70);
+
         if (dt <= max) {
             double delta = horizontalAngleTo(attacker, victim);
             double cone = plugin.getConfig().getDouble("checks.TargetSwitchC.cone-deg", 6.0);
@@ -304,7 +268,7 @@ public class CombatListener implements Listener {
     }
 
     private void flag(Player p, String check, double addVl, String debug) {
-        if (!checks.enabled(check)) return; // глобальный переключатель чеков
+        if (!checks.enabled(check)) return;
         vl.add(p.getUniqueId(), check, addVl, debug);
         vl.maybePunish(p.getUniqueId(), check);
     }
