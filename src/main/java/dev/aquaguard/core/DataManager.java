@@ -28,6 +28,10 @@ public class DataManager implements Listener {
         public int speedStreak = 0;
         public int speedBStreak = 0;
         public int flyStreak = 0;
+        public int stepStreak = 0;
+        public int phaseStreak = 0;
+        public int noSlowStreak = 0;
+
         public long lastVelocityMs = 0L;
         public boolean lastOnGround = true;
         public Location lastLoc = null;
@@ -53,8 +57,24 @@ public class DataManager implements Listener {
         public boolean preferSafeSetback = false;
         public long lastSetbackMs = 0L;
 
-        // FastPlace window (для WorldListener)
+        // World/Combat rates
         public ArrayDeque<Long> placeTimes = new ArrayDeque<>();
+        public ArrayDeque<Long> breakTimes = new ArrayDeque<>();
+        public ArrayDeque<Long> attackTimes = new ArrayDeque<>();
+
+        // PvP context
+        public long lastCombatMs = 0L;
+        public float lastHitYaw = 0f;
+        public float lastHitPitch = 0f;
+        public long lastHitMs = 0L;
+        public UUID lastTarget = null;
+        public long lastTargetSwitchMs = 0L;
+
+        // AutoTotem tracking
+        public long lastOffhandTotemMs = 0L;
+        public long lastOffhandByInventoryMs = 0L;
+        public long lastLowHpMs = 0L;
+        public ArrayDeque<Long> resurrectTimes = new ArrayDeque<>();
 
         public boolean hadRecentVelocity(long windowMs) {
             return (System.currentTimeMillis() - lastVelocityMs) <= windowMs;
