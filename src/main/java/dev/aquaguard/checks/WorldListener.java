@@ -12,12 +12,27 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * WorldListener: FastPlaceA / FastBreakA + ScaffoldA / TowerA (упрощённые).
+ * - Счётчики scaffoldScore / towerStreak храним локально (а не в DataManager), чтобы не требовать его правки.
+ */
 public class WorldListener implements Listener {
     private final AquaGuard plugin;
     private final DataManager data;
     private final ViolationManager vl;
     private final CheckManager checks;
     private final BypassManager bypass;
+
+    // Локальное состояние по игроку (чтобы не зависеть от полей в DataManager)
+    private static class LocalState {
+        int scaffoldScore = 0;
+        int towerStreak = 0;
+    }
+    private final ConcurrentHashMap<UUID, LocalState> local = new ConcurrentHashMap<>();
+    private LocalState st(Player p) { return local.computeIfAbsent(p.getUniqueId(), k -> new LocalState()); }
 
     public WorldListener(AquaGuard plugin, DataManager data, ViolationManager vl, CheckManager checks, BypassManager bypass) {
         this.plugin = plugin; this.data = data; this.vl = vl; this.checks = checks; this.bypass = bypass;
@@ -27,7 +42,9 @@ public class WorldListener implements Listener {
     public void onPlace(BlockPlaceEvent e) {
         Player p = e.getPlayer();
         if (bypass.isBypassed(p.getUniqueId())) return;
+
         var pd = data.get(p);
+        var ls = st(p);
         long now = System.currentTimeMillis();
 
         // FastPlaceA (CPS по окну)
@@ -44,38 +61,42 @@ public class WorldListener implements Listener {
             }
         }
 
-        // ScaffoldA (вперёд/под себя — простая эвристика)
+        // ScaffoldA эвристика (вперёд/под себя)
         if (checks.enabled("ScaffoldA")) {
             Location pl = p.getLocation();
             Location bl = e.getBlockPlaced().getLocation();
+
             boolean belowFeet = bl.getBlockY() <= pl.getBlockY() - 1;
             double vx = bl.getX() + 0.5 - pl.getX();
             double vz = bl.getZ() + 0.5 - pl.getZ();
             double dotFwd = Math.cos(Math.toRadians(pl.getYaw())) * vx + Math.sin(Math.toRadians(pl.getYaw())) * vz;
             boolean forward = dotFwd > 0.4;
+
             if (belowFeet || forward) {
-                pd.scaffoldScore = Math.min(pd.scaffoldScore + (p.isSprinting() ? 2 : 1), 100);
+                ls.scaffoldScore = Math.min(ls.scaffoldScore + (p.isSprinting() ? 2 : 1), 100);
             } else {
-                pd.scaffoldScore = Math.max(0, pd.scaffoldScore - 1);
+                ls.scaffoldScore = Math.max(0, ls.scaffoldScore - 1);
             }
+
             double thr = plugin.getConfig().getDouble("checks.ScaffoldA.score-threshold", 6.0);
-            if (pd.scaffoldScore >= thr) {
+            if (ls.scaffoldScore >= thr) {
                 flag(p, "ScaffoldA", plugin.getConfig().getDouble("checks.ScaffoldA.add-vl", 1.5), "pattern forward/below");
-                pd.scaffoldScore = (int) thr;
+                ls.scaffoldScore = (int) thr;
             }
         }
 
-        // TowerA (ставит под собой во время прыжка — серия)
+        // TowerA (ставит под собой во время прыжка)
         if (checks.enabled("TowerA")) {
             Location pl = p.getLocation();
             Location bl = e.getBlockPlaced().getLocation();
             boolean under = bl.getBlockX() == pl.getBlockX() && bl.getBlockZ() == pl.getBlockZ() && bl.getBlockY() == pl.getBlockY() - 1;
-            if (under && p.getVelocity().getY() > 0.2) pd.towerStreak++;
-            else pd.towerStreak = Math.max(0, pd.towerStreak - 1);
+            if (under && p.getVelocity().getY() > 0.2) ls.towerStreak++;
+            else ls.towerStreak = Math.max(0, ls.towerStreak - 1);
+
             int need = plugin.getConfig().getInt("checks.TowerA.streak-to-flag", 3);
-            if (pd.towerStreak >= need) {
+            if (ls.towerStreak >= need) {
                 flag(p, "TowerA", plugin.getConfig().getDouble("checks.TowerA.add-vl", 1.0), "place under while jumping");
-                pd.towerStreak = need;
+                ls.towerStreak = need;
             }
         }
     }
@@ -84,6 +105,7 @@ public class WorldListener implements Listener {
     public void onBreak(BlockBreakEvent e) {
         Player p = e.getPlayer();
         if (bypass.isBypassed(p.getUniqueId())) return;
+
         var pd = data.get(p);
         long now = System.currentTimeMillis();
 
@@ -91,6 +113,7 @@ public class WorldListener implements Listener {
         pd.breakTimes.addLast(now);
         long window = plugin.getConfig().getLong("checks.FastBreakA.window-ms", 1000);
         while (!pd.breakTimes.isEmpty() && (now - pd.breakTimes.getFirst()) > window) pd.breakTimes.removeFirst();
+
         if (checks.enabled("FastBreakA")) {
             double cps = pd.breakTimes.size() / Math.max(0.2, window / 1000.0);
             double limit = plugin.getConfig().getDouble("checks.FastBreakA.cps-limit", 8.0);
