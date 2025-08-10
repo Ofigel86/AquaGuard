@@ -79,10 +79,7 @@ public class MovementListener implements Listener {
         if (checks.enabled("StepA")) checkStepA(p, pd, dy, onGround);
         if (checks.enabled("PhaseA")) checkPhaseA(p, pd);
 
-        if (pd.requestSetback) {
-            applySetback(e, p, pd);
-            pd.requestSetback = false;
-        }
+        if (pd.requestSetback) { applySetback(e, p, pd); pd.requestSetback = false; }
 
         pd.lastOnGround = onGround;
         pd.lastLoc = to;
@@ -130,28 +127,30 @@ public class MovementListener implements Listener {
     private double envTickBonus(Player p, boolean onGround) {
         if (!onGround) return 0.0;
         Material below = p.getLocation().clone().subtract(0, 1, 0).getBlock().getType();
-        if (below == Material.ICE || below == Material.PACKED_ICE || below == Material.FROSTED_ICE) return 0.10;
-        if (below == Material.BLUE_ICE) return 0.14;
-        if (below == Material.SOUL_SAND || below == Material.SOUL_SOIL) {
-            var boots = p.getInventory().getBoots();
-            if (boots != null) {
-                int lvl = boots.getEnchantmentLevel(Enchantment.SOUL_SPEED);
-                if (lvl > 0) return 0.08 + 0.04 * (lvl - 1);
-            }
-        }
-        return 0.0;
-    }
-
-    private void updateSpeedWindow(Player p, DataManager.PlayerData pd, double h, boolean onGround, boolean sprinting) {
-        long now = System.currentTimeMillis();
-        pd.speedWin.addLast(new DataManager.PlayerData.Sample(now, h, onGround, sprinting));
-        long window = plugin.getConfig().getLong("checks.SpeedB.window-ms", 900);
-        while (!pd.speedWin.isEmpty() && (now - pd.speedWin.getFirst().t) > window) {
-            pd.speedWin.removeFirst();
+        switch (below) {
+            case ICE:
+            case PACKED_ICE:
+            case FROSTED_ICE: return 0.10;
+            case BLUE_ICE: return 0.14;
+            case SOUL_SAND:
+            case SOUL_SOIL:
+                var boots = p.getInventory().getBoots();
+                if (boots != null) {
+                    int lvl = boots.getEnchantmentLevel(Enchantment.SOUL_SPEED);
+                    if (lvl > 0) return 0.08 + 0.04 * (lvl - 1);
+                }
+            default: return 0.0;
         }
     }
 
     // SpeedB — средняя bps с combat‑иммунитетом
+    private void updateSpeedWindow(Player p, DataManager.PlayerData pd, double h, boolean onGround, boolean sprinting) {
+        long now = System.currentTimeMillis();
+        pd.speedWin.addLast(new DataManager.PlayerData.Sample(now, h, onGround, sprinting));
+        long window = plugin.getConfig().getLong("checks.SpeedB.window-ms", 900);
+        while (!pd.speedWin.isEmpty() && (now - pd.speedWin.getFirst().t) > window) pd.speedWin.removeFirst();
+    }
+
     private void checkSpeedB(Player p, DataManager.PlayerData pd) {
         if (isExempt(p) || pd.hadRecentVelocity(1200)) { pd.speedBStreak = 0; return; }
         long combatImm = plugin.getConfig().getLong("checks.SpeedB.combat-immunity-ms", 400);
@@ -207,14 +206,18 @@ public class MovementListener implements Listener {
 
     private double envBpsMultiplier(Player p) {
         Material below = p.getLocation().clone().subtract(0, 1, 0).getBlock().getType();
-        if (below == Material.ICE || below == Material.PACKED_ICE || below == Material.FROSTED_ICE) return 1.25;
-        if (below == Material.BLUE_ICE) return 1.35;
-        if (below == Material.SOUL_SAND || below == Material.SOUL_SOIL) {
-            var boots = p.getInventory().getBoots();
-            int lvl = boots != null ? boots.getEnchantmentLevel(Enchantment.SOUL_SPEED) : 0;
-            if (lvl > 0) return 1.15 + 0.08 * (lvl - 1);
+        switch (below) {
+            case ICE:
+            case PACKED_ICE:
+            case FROSTED_ICE: return 1.25;
+            case BLUE_ICE: return 1.35;
+            case SOUL_SAND:
+            case SOUL_SOIL:
+                var boots = p.getInventory().getBoots();
+                int lvl = boots != null ? boots.getEnchantmentLevel(Enchantment.SOUL_SPEED) : 0;
+                if (lvl > 0) return 1.15 + 0.08 * (lvl - 1);
+            default: return 1.0;
         }
-        return 1.0;
     }
 
     private void checkNoSlowA(Player p, DataManager.PlayerData pd, double horiz, boolean onGround) {
@@ -358,8 +361,6 @@ public class MovementListener implements Listener {
             pd.phaseStreak = Math.max(0, pd.phaseStreak - 1);
         }
     }
-
-    // helpers
 
     private void flag(Player p, String check, double addVl, String debug) {
         if (!checks.enabled(check)) return;
