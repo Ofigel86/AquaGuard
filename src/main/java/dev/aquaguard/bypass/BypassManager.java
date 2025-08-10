@@ -1,7 +1,6 @@
 package dev.aquaguard.bypass;
 
 import dev.aquaguard.AquaGuard;
-import org.bukkit.Bukkit;
 import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
@@ -9,31 +8,24 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Персональный обход (отключение античита) на аккаунт, с истечением.
- * - bypass.yml: хранит UUID -> until (ms) или 0 для бессрочно.
- * - Коды из config.yml (bypass.codes): одноразовые, дают обход на bypass.default-expire-mins минут.
- */
 public class BypassManager {
     private final AquaGuard plugin;
     private final Map<UUID, Long> bypassUntil = new ConcurrentHashMap<>();
     private final Set<String> codes = Collections.synchronizedSet(new HashSet<>());
-    private final File file;
-    private YamlConfiguration yml;
+    private final File file; private YamlConfiguration yml;
 
     public BypassManager(AquaGuard plugin) {
         this.plugin = plugin;
         this.file = new File(plugin.getDataFolder(), "bypass.yml");
         this.yml = new YamlConfiguration();
         load();
-        // одноразовые коды из конфига
         codes.addAll(plugin.getConfig().getStringList("bypass.codes"));
     }
 
     public boolean isBypassed(UUID id) {
         Long until = bypassUntil.get(id);
         if (until == null) return false;
-        if (until <= 0) return true; // бессрочно
+        if (until <= 0) return true;
         if (System.currentTimeMillis() > until) {
             bypassUntil.remove(id);
             save();
@@ -57,10 +49,6 @@ public class BypassManager {
         return Collections.unmodifiableMap(bypassUntil);
     }
 
-    /**
-     * Активировать обход по одноразовому коду из config.yml (bypass.codes).
-     * Возвращает true, если код действителен и активирован.
-     */
     public boolean claimCode(UUID id, String code) {
         if (code == null || code.isEmpty()) return false;
         synchronized (codes) {
@@ -69,11 +57,9 @@ public class BypassManager {
         }
         int def = plugin.getConfig().getInt("bypass.default-expire-mins", 1440);
         addBypass(id, def);
-
-        // удалить код из списка в конфиге (одноразовый)
-        List<String> cfgCodes = new ArrayList<>(plugin.getConfig().getStringList("bypass.codes"));
-        cfgCodes.remove(code);
-        plugin.getConfig().set("bypass.codes", cfgCodes);
+        List<String> cfg = new ArrayList<>(plugin.getConfig().getStringList("bypass.codes"));
+        cfg.remove(code);
+        plugin.getConfig().set("bypass.codes", cfg);
         plugin.saveConfig();
         return true;
     }
