@@ -1,80 +1,218 @@
-package dev.aquaguard;
+package dev.aquaguard.cmd;
 
+import dev.aquaguard.AquaGuard;
 import dev.aquaguard.bypass.BypassManager;
 import dev.aquaguard.checks.CheckManager;
-import dev.aquaguard.checks.CombatListener;
-import dev.aquaguard.checks.MovementListener;
-import dev.aquaguard.checks.VelocityListener;
-import dev.aquaguard.checks.WorldListener;
-import dev.aquaguard.core.DataManager;
 import dev.aquaguard.core.ViolationManager;
 import dev.aquaguard.freeze.FreezeManager;
 import dev.aquaguard.gui.GuiManager;
 import dev.aquaguard.owner.OwnerAccess;
 import dev.aquaguard.penalty.PenaltyManager;
-import dev.aquaguard.cmd.AgCommand;
-import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.command.*;
+import org.bukkit.entity.Player;
 
-public class AquaGuard extends JavaPlugin {
-    private static AquaGuard instance;
+import java.util.Comparator;
+import java.util.Map;
+import java.util.UUID;
 
-    private ViolationManager violationManager;
-    private DataManager dataManager;
-    private PenaltyManager penaltyManager;
-    private OwnerAccess ownerAccess;
+public class AgCommand implements CommandExecutor {
+    private final AquaGuard plugin;
+    private final ViolationManager vl;
+    private final PenaltyManager penalties;
+    private final OwnerAccess owner;
+    private final GuiManager gui;
+    private final BypassManager bypass;
+    private final CheckManager checks;
+    private final FreezeManager freeze;
 
-    private BypassManager bypassManager;
-    private CheckManager checkManager;
-    private FreezeManager freezeManager;
+    public AgCommand(AquaGuard plugin, ViolationManager vl, PenaltyManager penalties, OwnerAccess owner,
+                     GuiManager gui, BypassManager bypass, CheckManager checks, FreezeManager freeze) {
+        this.plugin = plugin; this.vl = vl; this.penalties = penalties; this.owner = owner;
+        this.gui = gui; this.bypass = bypass; this.checks = checks; this.freeze = freeze;
+    }
 
-    private GuiManager guiManager;
+    private boolean auth(CommandSender s) { if (owner.isOwner(s)) return true; s.sendMessage("Нет прав."); return false; }
 
     @Override
-    public void onEnable() {
-        instance = this;
-        saveDefaultConfig();
+    public boolean onCommand(CommandSender s, Command cmd, String label, String[] args) {
+        if (args.length == 0) { sendHelp(s); return true; }
 
-        this.violationManager = new ViolationManager(this);
-        this.violationManager.load();
-        this.dataManager = new DataManager();
-        this.penaltyManager = new PenaltyManager(this, violationManager);
-        this.ownerAccess = new OwnerAccess(this);
+        switch (args[0].toLowerCase()) {
+            case "ping" -> {
+                if (!auth(s)) return true;
+                boolean sb = plugin.getConfig().getBoolean("setback.enabled", true);
+                s.sendMessage("AquaGuard OK | penalties=" + penalties.mode().name().toLowerCase()
+                        + " | setback=" + (sb ? "on" : "off"));
+                return true;
+            }
 
-        this.bypassManager = new BypassManager(this);
-        this.checkManager = new CheckManager(this);
-        this.freezeManager = new FreezeManager();
+            case "gui" -> {
+                if (!auth(s)) return true;
+                if (s instanceof Player p) gui.openMain(p);
+                else s.sendMessage("Только в игре.");
+                return true;
+            }
 
-        this.guiManager = new GuiManager(this, violationManager, penaltyManager, checkManager, bypassManager, freezeManager);
+            case "vl" -> {
+                if (!auth(s)) return true;
+                UUID target = null; String name = null;
+                if (args.length >= 2) {
+                    Player p = Bukkit.getPlayerExact(args[1]);
+                    if (p != null) { target = p.getUniqueId(); name = p.getName(); }
+                    else {
+                        OfflinePlayer op = Bukkit.getOfflinePlayer(args[1]);
+                        if (op != null && (op.isOnline() || op.hasPlayedBefore())) { target = op.getUniqueId(); name = op.getName(); }
+                    }
+                } else if (s instanceof Player p) { target = p.getUniqueId(); name = p.getName(); }
+                if (target == null) { s.sendMessage("Игрок не найден."); return true; }
 
-        var pm = getServer().getPluginManager();
-        pm.registerEvents(ownerAccess, this);
-        pm.registerEvents(dataManager, this);
-        pm.registerEvents(new MovementListener(this, dataManager, violationManager, checkManager, bypassManager, freezeManager), this);
-        pm.registerEvents(new VelocityListener(dataManager), this);
-        pm.registerEvents(new WorldListener(this, dataManager, violationManager, checkManager, bypassManager), this);
-        pm.registerEvents(new CombatListener(this, dataManager, violationManager, checkManager, bypassManager), this);
-        pm.registerEvents(penaltyManager, this);
-        pm.registerEvents(guiManager, this);
+                Map<String, Double> map = vl.get(target);
+                if (map.isEmpty()) { s.sendMessage("VL пуст для " + name); return true; }
 
-        long minute = 20L * 60L;
-        getServer().getScheduler().runTaskTimer(this,
-                () -> violationManager.decayAll(getConfig().getDouble("decay-per-minute", 0.5)),
-                minute, minute);
+                s.sendMessage("VL для " + name + ":");
+                map.entrySet().stream()
+                        .sorted(Comparator.comparingDouble(Map.Entry<String, Double>::getValue).reversed())
+                        .forEach(e -> s.sendMessage(" - " + e.getKey() + ": " + String.format("%.1f", e.getValue())));
+                s.sendMessage("Итого: " + String.format("%.1f", vl.total(target)));
+                return true;
+            }
 
-        if (getCommand("ag") != null) {
-            getCommand("ag").setExecutor(
-                    new AgCommand(this, violationManager, penaltyManager, ownerAccess, guiManager, bypassManager, checkManager, freezeManager)
-            );
+            case "penalties" -> {
+                if (!auth(s)) return true;
+                if (args.length < 2) {
+                    s.sendMessage("Текущий режим: " + penalties.mode().name().toLowerCase());
+                    s.sendMessage("Использование: /" + label + " penalties <off|simulate|soft|hard>");
+                    return true;
+                }
+                switch (args[1].toLowerCase()) {
+                    case "off" -> penalties.setMode(PenaltyManager.Mode.OFF);
+                    case "simulate" -> penalties.setMode(PenaltyManager.Mode.SIMULATE);
+                    case "soft" -> penalties.setMode(PenaltyManager.Mode.SOFT);
+                    case "hard" -> penalties.setMode(PenaltyManager.Mode.HARD);
+                    default -> { s.sendMessage("off|simulate|soft|hard"); return true; }
+                }
+                s.sendMessage("Penalties: " + penalties.mode().name().toLowerCase());
+                return true;
+            }
+
+            case "setback" -> {
+                if (!auth(s)) return true;
+                if (args.length < 2) {
+                    boolean sb = plugin.getConfig().getBoolean("setback.enabled", true);
+                    s.sendMessage("Setback сейчас: " + (sb ? "on" : "off"));
+                    s.sendMessage("Использование: /" + label + " setback <on|off|toggle>");
+                    return true;
+                }
+                String v = args[1].toLowerCase();
+                boolean cur = plugin.getConfig().getBoolean("setback.enabled", true);
+                boolean next = switch (v) {
+                    case "on" -> true; case "off" -> false; case "toggle" -> !cur;
+                    default -> { s.sendMessage("on|off|toggle"); yield cur; }
+                };
+                plugin.getConfig().set("setback.enabled", next);
+                plugin.saveConfig();
+                s.sendMessage("Setback: " + (next ? "on" : "off"));
+                return true;
+            }
+
+            case "code" -> {
+                if (!(s instanceof Player p)) { s.sendMessage("Только в игре."); return true; }
+                if (args.length < 2) { s.sendMessage("Использование: /" + label + " code <секрет>"); return true; }
+                s.sendMessage(bypass.claimCode(p.getUniqueId(), args[1]) ? "Обход активирован." : "Неверный/использованный код.");
+                return true;
+            }
+
+            case "bypass" -> {
+                if (!auth(s)) return true;
+                if (args.length < 2) {
+                    s.sendMessage("/" + label + " bypass add <ник> [минуты|0=бессрочно]");
+                    s.sendMessage("/" + label + " bypass remove <ник>");
+                    s.sendMessage("/" + label + " bypass list");
+                    return true;
+                }
+                switch (args[1].toLowerCase()) {
+                    case "add" -> {
+                        if (args.length < 3) { s.sendMessage("Укажи ник."); return true; }
+                        Player p = Bukkit.getPlayerExact(args[2]);
+                        if (p == null) { s.sendMessage("Игрок оффлайн."); return true; }
+                        long mins = (args.length >= 4)
+                                ? parseLong(args[3], plugin.getConfig().getInt("bypass.default-expire-mins", 1440))
+                                : plugin.getConfig().getInt("bypass.default-expire-mins", 1440);
+                        bypass.addBypass(p.getUniqueId(), mins);
+                        s.sendMessage("Bypass выдан " + p.getName() + " на " + mins + " минут.");
+                        return true;
+                    }
+                    case "remove" -> {
+                        if (args.length < 3) { s.sendMessage("Укажи ник."); return true; }
+                        OfflinePlayer op = Bukkit.getOfflinePlayer(args[2]);
+                        bypass.removeBypass(op.getUniqueId());
+                        s.sendMessage("Bypass снят с " + op.getName());
+                        return true;
+                    }
+                    case "list" -> {
+                        s.sendMessage("Активные обходы:");
+                        bypass.list().forEach((id, until) -> {
+                            String name = Bukkit.getOfflinePlayer(id).getName();
+                            long left = (until <= 0) ? -1 : Math.max(0, (until - System.currentTimeMillis()) / 60000);
+                            s.sendMessage(" - " + name + " (" + id + "): " + (left < 0 ? "бессрочно" : left + " мин"));
+                        });
+                        return true;
+                    }
+                }
+                return true;
+            }
+
+            case "checks" -> {
+                if (!auth(s)) return true;
+                if (args.length < 3) { s.sendMessage("Использование: /" + label + " checks <checkName> <on|off|toggle>"); return true; }
+                String chk = args[1], mode = args[2].toLowerCase();
+                switch (mode) {
+                    case "on" -> checks.set(chk, true);
+                    case "off" -> checks.set(chk, false);
+                    case "toggle" -> checks.toggle(chk);
+                    default -> { s.sendMessage("on|off|toggle"); return true; }
+                }
+                s.sendMessage("Check " + chk + ": " + (checks.enabled(chk) ? "ON" : "OFF"));
+                return true;
+            }
+
+            case "freeze" -> {
+                if (!auth(s)) return true;
+                if (args.length < 2) { s.sendMessage("Использование: /" + label + " freeze <ник>"); return true; }
+                Player p = Bukkit.getPlayerExact(args[1]);
+                if (p == null) { s.sendMessage("Игрок оффлайн."); return true; }
+                boolean ns = !freeze.is(p.getUniqueId());
+                freeze.set(p.getUniqueId(), ns);
+                s.sendMessage("Freeze " + p.getName() + ": " + (ns ? "ON" : "OFF"));
+                return true;
+            }
+
+            case "reload" -> {
+                if (!auth(s)) return true;
+                plugin.reloadConfig();
+                s.sendMessage("AquaGuard config reloaded.");
+                return true;
+            }
+
+            case "whoami" -> {
+                if (s instanceof Player p) s.sendMessage("Ты " + p.getName() + " UUID=" + p.getUniqueId());
+                else s.sendMessage("Консоль");
+                return true;
+            }
+
+            default -> { sendHelp(s); return true; }
         }
-
-        getLogger().info("AquaGuard enabled.");
     }
 
-    @Override
-    public void onDisable() {
-        violationManager.save();
-        getLogger().info("AquaGuard disabled.");
-    }
+    private long parseLong(String s, long def) { try { return Long.parseLong(s); } catch (Exception ignored) { return def; } }
 
-    public static AquaGuard get() { return instance; }
+    private void sendHelp(CommandSender s) {
+        s.sendMessage("/ag ping | /ag gui | /ag vl [ник]");
+        s.sendMessage("/ag penalties <off|simulate|soft|hard> | /ag setback <on|off|toggle>");
+        s.sendMessage("/ag code <секрет> | /ag bypass add|remove|list");
+        s.sendMessage("/ag checks <check> <on|off|toggle> | /ag freeze <ник>");
+        s.sendMessage("/ag reload | /ag whoami");
+    }
 }
