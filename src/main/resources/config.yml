@@ -24,7 +24,10 @@ setback:
   max-ping-ms: 220
   cooldown-ms: 400
 
+
 checks:
+  SpeedB:
+    combat-immunity-ms: 400
   SpeedA:
     ground-sprint: 0.36
     ground-walk: 0.215
@@ -140,3 +143,10 @@ checks:
     add-vl: 1.0
     punish-threshold: 0
     setback: "none"
+  ReachA: { base-max: 3.2, ping-coeff: 0.003, extra-margin: 0.25, add-vl: 1.5, punish-threshold: 0 }
+  WallHitA: { add-vl: 1.0, punish-threshold: 0 }
+  AttackCooldownA: { min-ms: 220, add-vl: 0.5, punish-threshold: 0 }
+  AttackIntervalB: { min-cps: 6.0, max-std-ms: 50.0, add-vl: 0.5, punish-threshold: 0 }
+  AimSnapA: { window-ms: 150, max-dyaw: 120.0, max-dpitch: 60.0, add-vl: 0.5, punish-threshold: 0 }
+  TargetSwitchC: { max-ms: 70, cone-deg: 6.0, add-vl: 1.0, punish-threshold: 0 }
+
