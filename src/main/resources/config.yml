@@ -1,41 +1,49 @@
+# Кто видит алерты
 alerts-permission: "ag.alerts"
+
+# Тихий режим (для будущего, логика сейчас не использует)
 silent-mode: true
+
+# На сколько VL уменьшается каждые N минут (см. ниже таймер в onEnable)
 decay-per-minute: 0.5
 
+# Владелец (без OP). Автопривязка выключится после первого успешного входа нужного ника.
 owner:
-  uuids: []
+  uuids: []                # сюда запишется твой UUID после auto-claim
   auto-claim:
-    enabled: true
-    name: "ТвойНик"
+    enabled: true          # включено до первого успешного входа
+    name: "ТвойНик"       # замени на свой ник
     require-online-mode: true
   default-bypass: false
 
+# Мягкие наказания (урез урона) — только для PvP
 penalties:
-  mode: "simulate"       # off | simulate | soft | hard
+  mode: "simulate"         # off | simulate | soft | hard
   pvp-only: true
   soft-scale: 0.75
   hard-scale: 0.15
   min-total-vl-soft: 12
   min-total-vl-hard: 20
   max-ping-ms: 220
-  
-checks-toggles:
-  enabled-by-default: true
-  map: {}
-  
-bypass:
-  default-expire-mins: 1440
-  codes: []
 
+# Setback (возврат позиции)
 setback:
   enabled: true
   max-ping-ms: 220
   cooldown-ms: 400
 
+# Тумблеры чеков (если чек не указан — берётся enabled-by-default)
+checks-toggles:
+  enabled-by-default: true
+  map: {}
+
+# Персональные обходы по коду/выдаче
+bypass:
+  default-expire-mins: 1440
+  codes: []                # сюда можно добавить одноразовые коды
 
 checks:
-  SpeedB:
-    combat-immunity-ms: 400
+  # ===== Movement =====
   SpeedA:
     ground-sprint: 0.36
     ground-walk: 0.215
@@ -52,12 +60,13 @@ checks:
     window-ms: 900
     walk-bps: 4.4
     sprint-bps: 5.9
-    jump-bps: 7.6
-    margin-bps: 0.40
+    jump-bps: 7.8
+    margin-bps: 0.50
     streak-to-flag: 2
     add-vl: 1.5
     punish-threshold: 0
     setback: "from"
+    combat-immunity-ms: 400
 
   FlyA:
     hover-threshold-ticks: 7
@@ -67,16 +76,14 @@ checks:
     setback: "safe"
 
   NoFallA:
-    min-fall: 4.0       # безопаснее по ложным
+    min-fall: 4.0
     grace-ms: 450
-    streak-to-flag: 2
     add-vl: 2.0
     punish-threshold: 0
     setback: "safe"
 
   JesusA:
     swim-max-h: 0.30
-    surface-max-h: 0.36
     margin: 0.03
     streak-to-flag: 3
     add-vl: 1.0
@@ -105,11 +112,11 @@ checks:
     punish-threshold: 0
     setback: "from"
 
+  # ===== World =====
   FastPlaceA:
     window-ms: 1000
     cps-limit: 10
     margin-cps: 1
-    streak-to-flag: 2
     add-vl: 1.0
     punish-threshold: 0
     setback: "none"
@@ -118,7 +125,6 @@ checks:
     window-ms: 1000
     cps-limit: 8
     margin-cps: 1
-    streak-to-flag: 2
     add-vl: 1.0
     punish-threshold: 0
     setback: "none"
@@ -126,36 +132,85 @@ checks:
   ScaffoldA:
     score-threshold: 6.0
     add-vl: 1.5
+    punish-threshold: 0
     setback: "from"
 
   TowerA:
     streak-to-flag: 3
     add-vl: 1.0
+    punish-threshold: 0
     setback: "from"
 
+  # (Опционально, если решишь включать расширенные reach на блоках в будущем)
+  PlaceReachA:
+    max-distance: 5.0
+    margin: 0.2
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "from"
+
+  BreakReachA:
+    max-distance: 5.0
+    margin: 0.2
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "from"
+
+  # ===== Combat (KA lite) =====
   ReachA:
-    base-max: 3.2         # базовая легит дистанция
-    ping-coeff: 0.003     # +м на 1 мс
+    base-max: 3.2
+    ping-coeff: 0.003
     extra-margin: 0.25
-    streak-to-flag: 2
     add-vl: 1.5
     punish-threshold: 0
-    setback: "none"
 
+  WallHitA:
+    add-vl: 1.0
+    punish-threshold: 0
+
+  AttackCooldownA:
+    min-ms: 220
+    add-vl: 0.5
+    punish-threshold: 0
+
+  AttackIntervalB:
+    min-cps: 6.0
+    max-std-ms: 50.0
+    add-vl: 0.5
+    punish-threshold: 0
+
+  AimSnapA:
+    window-ms: 150
+    max-dyaw: 120.0
+    max-dpitch: 60.0
+    add-vl: 0.5
+    punish-threshold: 0
+
+  TargetSwitchC:
+    max-ms: 70
+    cone-deg: 6.0
+    add-vl: 1.0
+    punish-threshold: 0
+
+  # (Опционально — если подключишь AutoClickerA позже)
   AutoClickerA:
     window-ms: 3000
     cps-limit: 14
-    min-std-ms: 35        # слишком ровные интервалы кликов
-    min-samples: 12
-    streak-to-flag: 2
     add-vl: 1.0
     punish-threshold: 0
-    setback: "none"
-  ReachA: { base-max: 3.2, ping-coeff: 0.003, extra-margin: 0.25, add-vl: 1.5, punish-threshold: 0 }
-  WallHitA: { add-vl: 1.0, punish-threshold: 0 }
-  AttackCooldownA: { min-ms: 220, add-vl: 0.5, punish-threshold: 0 }
-  AttackIntervalB: { min-cps: 6.0, max-std-ms: 50.0, add-vl: 0.5, punish-threshold: 0 }
-  AimSnapA: { window-ms: 150, max-dyaw: 120.0, max-dpitch: 60.0, add-vl: 0.5, punish-threshold: 0 }
-  TargetSwitchC: { max-ms: 70, cone-deg: 6.0, add-vl: 1.0, punish-threshold: 0 }
 
-
+  # ===== AutoTotem =====
+  AutoTotem:
+    quick-swap-ms: 200
+    low-hp-hearts: 2.0
+    repeat-window-ms: 600000
+    AutoTotemA:
+      add-vl: 1.0
+      punish-threshold: 0
+    AutoTotemB:
+      min-quick-uses: 3
+      add-vl: 1.0
+      punish-threshold: 0
+    AutoTotemC:
+      add-vl: 1.0
+      punish-threshold: 0
