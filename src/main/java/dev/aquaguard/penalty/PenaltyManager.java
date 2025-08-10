@@ -9,6 +9,12 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 
+/**
+ * Мягкие наказания для PvP (урез урона) по суммарному VL.
+ * Режимы: off | simulate | soft | hard
+ * - pvp-only: true — действует только игрок -> игрок
+ * - max-ping-ms, TPS ворота (TPS проверяется внешними воротами при желании)
+ */
 public class PenaltyManager implements Listener {
     private final AquaGuard plugin;
     private final ViolationManager vl;
@@ -40,15 +46,13 @@ public class PenaltyManager implements Listener {
 
         Player attacker = null;
         if (e.getDamager() instanceof Player p) attacker = p;
-        else if (e.getDamager() instanceof Projectile pr && pr.getShooter() instanceof Player p2) attacker = p2;
+        else if (e.getDamager() instanceof Projectile pr && pr.getShooter() instanceof Player p) attacker = p;
         if (attacker == null || !(e.getEntity() instanceof Player)) return;
 
         if (attacker.hasPermission("ag.bypass")) return;
 
         int maxPing = plugin.getConfig().getInt("penalties.max-ping-ms", 220);
-        try {
-            if (attacker.getPing() > maxPing) return;
-        } catch (Throwable ignored) {}
+        try { if (attacker.getPing() > maxPing) return; } catch (Throwable ignored) {}
 
         double total = vl.total(attacker.getUniqueId());
         double softMin = plugin.getConfig().getDouble("penalties.min-total-vl-soft", 12.0);
