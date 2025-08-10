@@ -1,25 +1,27 @@
 package dev.aquaguard.checks;
 
 import dev.aquaguard.core.DataManager;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerVelocityEvent;
-import org.bukkit.event.player.PlayerTeleportEvent;
-import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
+import org.bukkit.event.entity.EntityToggleGlideEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerRiptideEvent;
-import org.bukkit.event.player.PlayerToggleGlideEvent;
-import org.bukkit.event.player.PlayerElytraBoostEvent; // Paper API
+import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.event.player.PlayerVelocityEvent;
+import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 import org.bukkit.event.vehicle.VehicleEnterEvent;
 import org.bukkit.event.vehicle.VehicleExitEvent;
 
 /**
- * Отмечает "рывковые" состояния, которые дают иммунитет мувмент‑чекам:
+ * Помечает "рывковые" состояния, которые дают иммунитет мувмент‑чекам:
  * - Нокбэк/рывок (PlayerVelocityEvent)
  * - Перл / Хорус (Teleport)
  * - Риптайд (Trident)
- * - Элитра‑буст (Paper)
- * - Переключение глайда (вход/выход)
+ * - Элитра‑буст: имитируем через PlayerInteractEvent с FIREWORK_ROCKET во время глайда
+ * - Переключение глайда (EntityToggleGlideEvent)
  * - Посадка/выход из транспорта
  *
  * MovementListener использует DataManager.PlayerData.lastVelocityMs
@@ -32,56 +34,57 @@ public class VelocityListener implements Listener {
         this.data = data;
     }
 
-    private void mark(Object player) {
-        if (player instanceof org.bukkit.entity.Player p) {
-            data.get(p).lastVelocityMs = System.currentTimeMillis();
-        }
+    private void mark(Player p) {
+        if (p != null) data.get(p).lastVelocityMs = System.currentTimeMillis();
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onVelocity(PlayerVelocityEvent e) {
-        // Нокбэк, перлы с импульсом, рывки от поршней/взрывов и т.п.
-        data.get(e.getPlayer()).lastVelocityMs = System.currentTimeMillis();
+        mark(e.getPlayer());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onTeleport(PlayerTeleportEvent e) {
-        // Перлы/хорус — типичные "скачки" позиции → даём иммунитет мувмент‑чекам
         TeleportCause c = e.getCause();
         if (c == TeleportCause.ENDER_PEARL || c == TeleportCause.CHORUS_FRUIT) {
-            data.get(e.getPlayer()).lastVelocityMs = System.currentTimeMillis();
+            mark(e.getPlayer());
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onRiptide(PlayerRiptideEvent e) {
-        // Риптайд даёт сильный импульс движения
-        data.get(e.getPlayer()).lastVelocityMs = System.currentTimeMillis();
+        mark(e.getPlayer());
+    }
+
+    // Имитируем элитра‑буст без Paper-события:
+    // если игрок кликает фейерверком во время глайда — считаем это импульсом
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onRocketUse(PlayerInteractEvent e) {
+        if (!(e.getPlayer() instanceof Player p)) return;
+        var item = e.getItem();
+        if (item != null && item.getType() == Material.FIREWORK_ROCKET && p.isGliding()) {
+            mark(p);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onElytraBoost(PlayerElytraBoostEvent e) {
-        // Paper: фейерверк‑буст элитры
-        data.get(e.getPlayer()).lastVelocityMs = System.currentTimeMillis();
-    }
-
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onToggleGlide(PlayerToggleGlideEvent e) {
-        // Вход/выход из глайда часто сопровождается скачками вертикали/горизонтали
-        data.get(e.getPlayer()).lastVelocityMs = System.currentTimeMillis();
+    public void onToggleGlide(EntityToggleGlideEvent e) {
+        if (e.getEntity() instanceof Player p) {
+            mark(p);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onVehicleEnter(VehicleEnterEvent e) {
-        if (e.getEntered() instanceof org.bukkit.entity.Player p) {
-            data.get(p).lastVelocityMs = System.currentTimeMillis();
+        if (e.getEntered() instanceof Player p) {
+            mark(p);
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onVehicleExit(VehicleExitEvent e) {
-        if (e.getExited() instanceof org.bukkit.entity.Player p) {
-            data.get(p).lastVelocityMs = System.currentTimeMillis();
+        if (e.getExited() instanceof Player p) {
+            mark(p);
         }
     }
 }
