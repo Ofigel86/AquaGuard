@@ -19,6 +19,13 @@ import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.util.Vector;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class MovementListener implements Listener {
     private final AquaGuard plugin;
@@ -27,6 +34,17 @@ public class MovementListener implements Listener {
     private final CheckManager checks;
     private final BypassManager bypass;
     private final FreezeManager freeze;
+
+    // Локальные стрейки для Strafe (не трогаем DataManager)
+    private static class Local {
+        int strafeAStreak = 0;
+        int strafeBStreak = 0;
+        int strafeCStreak = 0;
+        // чтобы быстро брать предыдущую "h" без доступа к окну
+        double lastH = 0.0;
+    }
+    private final Map<UUID, Local> local = new ConcurrentHashMap<>();
+    private Local st(Player p) { return local.computeIfAbsent(p.getUniqueId(), k -> new Local()); }
 
     public MovementListener(AquaGuard plugin, DataManager data, ViolationManager vl,
                             CheckManager checks, BypassManager bypass, FreezeManager freeze) {
@@ -43,6 +61,7 @@ public class MovementListener implements Listener {
         if (e.getFrom().distanceSquared(e.getTo()) < 1e-6) return;
 
         DataManager.PlayerData pd = data.get(p);
+        Local ls = st(p);
 
         Location from = e.getFrom(), to = e.getTo();
         double dx = to.getX() - from.getX();
@@ -72,6 +91,10 @@ public class MovementListener implements Listener {
         updateSpeedWindow(p, pd, horizontal, onGround, p.isSprinting());
         if (checks.enabled("SpeedB")) checkSpeedB(p, pd);
 
+        if (checks.enabled("StrafeA")) checkStrafeA(p, pd, ls, horizontal, onGround);
+        if (checks.enabled("StrafeB")) checkStrafeB(p, pd, ls, dx, dz, horizontal);
+        if (checks.enabled("StrafeC")) checkStrafeC(p, pd);
+
         if (checks.enabled("NoSlowA")) checkNoSlowA(p, pd, horizontal, onGround);
         if (checks.enabled("FlyA")) checkFlyA(p, pd, dy, onGround);
         if (checks.enabled("NoFallA")) checkNoFallA(p, pd);
@@ -81,8 +104,10 @@ public class MovementListener implements Listener {
 
         if (pd.requestSetback) { applySetback(e, p, pd); pd.requestSetback = false; }
 
+        // keep state
         pd.lastOnGround = onGround;
         pd.lastLoc = to;
+        ls.lastH = horizontal;
     }
 
     private void updateLastSafeGround(Player p, DataManager.PlayerData pd, Location to, boolean onGround) {
@@ -93,7 +118,7 @@ public class MovementListener implements Listener {
         pd.lastSafeGround = to.clone();
     }
 
-    // SpeedA — земля/воздух с бонусами среды
+    // ===== SpeedA =====
     private void checkSpeedA(Player p, DataManager.PlayerData pd, double horiz, boolean onGround) {
         if (isExempt(p) || pd.hadRecentVelocity(1200)) { pd.speedStreak = 0; return; }
 
@@ -143,7 +168,7 @@ public class MovementListener implements Listener {
         }
     }
 
-    // SpeedB — средняя bps с combat‑иммунитетом
+    // ===== SpeedB =====
     private void updateSpeedWindow(Player p, DataManager.PlayerData pd, double h, boolean onGround, boolean sprinting) {
         long now = System.currentTimeMillis();
         pd.speedWin.addLast(new DataManager.PlayerData.Sample(now, h, onGround, sprinting));
@@ -220,6 +245,120 @@ public class MovementListener implements Listener {
         }
     }
 
+    // ===== StrafeA: спайк ускорения =====
+    private void checkStrafeA(Player p, DataManager.PlayerData pd, Local ls, double h, boolean onGround) {
+        if (isExempt(p) || pd.hadRecentVelocity(1200)) { ls.strafeAStreak = 0; return; }
+        if (isInOrNearLiquid(p)) { ls.strafeAStreak = 0; return; }
+
+        double prevH = ls.lastH;
+        double delta = Math.max(0.0, h - prevH);
+
+        double accLimit = plugin.getConfig().getDouble("checks.StrafeA.acc-limit", 0.15);
+        double margin = plugin.getConfig().getDouble("checks.StrafeA.margin", 0.03);
+        int streakToFlag = plugin.getConfig().getInt("checks.StrafeA.streak-to-flag", 2);
+        double addVl = plugin.getConfig().getDouble("checks.StrafeA.add-vl", 1.0);
+
+        // Учитываем среду/эффекты — немного повышаем лимит
+        double boost = 0.0;
+        if (onGround) boost += envTickBonus(p, true);
+        PotionEffect eff = p.getPotionEffect(PotionEffectType.SPEED);
+        if (eff != null) boost += 0.01 * (eff.getAmplifier() + 1);
+        double allowed = accLimit + boost + margin;
+
+        if (delta > allowed) {
+            if (++ls.strafeAStreak >= streakToFlag) {
+                flag(p, "StrafeA", addVl, String.format("Δh=%.3f > %.3f (prev=%.3f, cur=%.3f)", delta, allowed, prevH, h));
+                ls.strafeAStreak = streakToFlag;
+            }
+        } else {
+            ls.strafeAStreak = Math.max(0, ls.strafeAStreak - 1);
+        }
+    }
+
+    // ===== StrafeB: большой угол между взглядом и движением при высокой скорости =====
+    private void checkStrafeB(Player p, DataManager.PlayerData pd, Local ls, double dx, double dz, double h) {
+        if (isExempt(p) || pd.hadRecentVelocity(1200)) { ls.strafeBStreak = 0; return; }
+        if (isInOrNearLiquid(p)) { ls.strafeBStreak = 0; return; }
+
+        double minH = plugin.getConfig().getDouble("checks.StrafeB.min-h", 0.25);
+        if (h < minH) { ls.strafeBStreak = Math.max(0, ls.strafeBStreak - 1); return; }
+
+        // угол между вектором движения и направлением взгляда (горизонтально)
+        Vector move = new Vector(dx, 0, dz);
+        if (move.lengthSquared() < 1e-8) { ls.strafeBStreak = Math.max(0, ls.strafeBStreak - 1); return; }
+        move.normalize();
+        Vector look = p.getEyeLocation().getDirection().setY(0).normalize();
+
+        double dot = Math.max(-1.0, Math.min(1.0, move.dot(look)));
+        double deg = Math.toDegrees(Math.acos(dot));
+
+        double angleThr = plugin.getConfig().getDouble("checks.StrafeB.angle-deg", 95.0);
+        int streakToFlag = plugin.getConfig().getInt("checks.StrafeB.streak-to-flag", 3);
+        double addVl = plugin.getConfig().getDouble("checks.StrafeB.add-vl", 1.0);
+
+        // Очень большой угол (почти перпендикуляр/назад) на заметной скорости — редкий легит
+        if (deg >= angleThr) {
+            if (++ls.strafeBStreak >= streakToFlag) {
+                flag(p, "StrafeB", addVl, String.format("angle=%.1f°, h=%.3f", deg, h));
+                ls.strafeBStreak = streakToFlag;
+            }
+        } else {
+            ls.strafeBStreak = Math.max(0, ls.strafeBStreak - 1);
+        }
+    }
+
+    // ===== StrafeC: air-control — bps выше порога при высоком airRatio =====
+    private void checkStrafeC(Player p, DataManager.PlayerData pd) {
+        if (isExempt(p) || pd.hadRecentVelocity(1200)) { resetStrafeC(p); return; }
+        if (isInOrNearLiquid(p)) { resetStrafeC(p); return; }
+        if (pd.speedWin.size() < 6) { resetStrafeC(p); return; }
+
+        long now = System.currentTimeMillis();
+        long oldest = pd.speedWin.getFirst().t;
+        double secs = Math.max(0.2, (now - oldest) / 1000.0);
+
+        double sumH = 0.0;
+        int air = 0, total = 0, sprintTicks = 0;
+        for (var s : pd.speedWin) {
+            sumH += s.h; total++;
+            if (!s.onGround) air++;
+            if (s.sprinting) sprintTicks++;
+        }
+        double bps = sumH / secs;
+        double airRatio = (total == 0) ? 0.0 : (air / (double) total);
+
+        double jumpBps = plugin.getConfig().getDouble("checks.SpeedB.jump-bps", 7.8);
+        double extra = plugin.getConfig().getDouble("checks.StrafeC.extra-bps", 0.20);
+        double minAir = plugin.getConfig().getDouble("checks.StrafeC.air-ratio", 0.70);
+        int streakToFlag = plugin.getConfig().getInt("checks.StrafeC.streak-to-flag", 2);
+        double addVl = plugin.getConfig().getDouble("checks.StrafeC.add-vl", 1.0);
+
+        // эффект скорости — множитель
+        PotionEffect sp = p.getPotionEffect(PotionEffectType.SPEED);
+        double allowed = jumpBps + extra;
+        if (sp != null) allowed *= (1.0 + 0.2 * (sp.getAmplifier() + 1));
+        allowed *= envBpsMultiplier(p);
+
+        var boots = p.getInventory().getBoots();
+        int ds = boots != null ? boots.getEnchantmentLevel(Enchantment.DEPTH_STRIDER) : 0;
+        if (isInOrNearLiquid(p) && ds > 0) allowed *= (1.0 + 0.15 * ds);
+
+        Local ls = st(p);
+        if (airRatio >= minAir && bps > allowed) {
+            if (++ls.strafeCStreak >= streakToFlag) {
+                flag(p, "StrafeC", addVl, String.format("bps=%.2f>%.2f air=%.0f%%", bps, allowed, airRatio * 100));
+                ls.strafeCStreak = streakToFlag;
+            }
+        } else {
+            ls.strafeCStreak = Math.max(0, ls.strafeCStreak - 1);
+        }
+    }
+
+    private void resetStrafeC(Player p) {
+        st(p).strafeCStreak = 0;
+    }
+
+    // ===== NoSlowA (щит) =====
     private void checkNoSlowA(Player p, DataManager.PlayerData pd, double horiz, boolean onGround) {
         if (!onGround) return;
         if (isInOrNearLiquid(p)) return;
@@ -245,6 +384,7 @@ public class MovementListener implements Listener {
         }
     }
 
+    // ===== FlyA (hover-only) =====
     private void checkFlyA(Player p, DataManager.PlayerData pd, double dy, boolean onGround) {
         if (isExempt(p)) { pd.flyStreak = 0; return; }
 
@@ -272,6 +412,7 @@ public class MovementListener implements Listener {
         }
     }
 
+    // ===== NoFallA =====
     private void checkNoFallA(Player p, DataManager.PlayerData pd) {
         if (!pd.awaitingFallDamage) return;
         long grace = plugin.getConfig().getLong("checks.NoFallA.grace-ms", 450);
@@ -295,26 +436,37 @@ public class MovementListener implements Listener {
         }
     }
 
+    // ===== JesusA (усилен) =====
     private void checkJesusA(Player p, DataManager.PlayerData pd, double horiz) {
-        if (!isInWater(p)) return;
+        if (!isInWater(p)) return; // только когда реально в воде/колонне/водорослях
         if (p.hasPotionEffect(PotionEffectType.DOLPHINS_GRACE)) return;
 
+        // различаем "в воде" и "на поверхности"
+        Block head = p.getLocation().clone().add(0, 1, 0).getBlock();
+        boolean headWater = isWaterLike(head);
+
         double swimMax = plugin.getConfig().getDouble("checks.JesusA.swim-max-h", 0.30);
+        double surfaceMax = plugin.getConfig().getDouble("checks.JesusA.surface-max-h", 0.36);
         double margin = plugin.getConfig().getDouble("checks.JesusA.margin", 0.03);
         int streakToFlag = plugin.getConfig().getInt("checks.JesusA.streak-to-flag", 3);
         double addVl = plugin.getConfig().getDouble("checks.JesusA.add-vl", 1.0);
 
         var boots = p.getInventory().getBoots();
         int ds = boots != null ? boots.getEnchantmentLevel(Enchantment.DEPTH_STRIDER) : 0;
-        double allowed = swimMax + (ds > 0 ? (0.05 * ds) : 0.0);
+        double dsBonus = (ds > 0) ? (0.05 * ds) : 0.0;
+
+        // Если голова в воде — считаем "плавание", иначе "поверхность"
+        double allowed = (headWater ? (swimMax + dsBonus) : (surfaceMax + dsBonus));
         if (p.hasPotionEffect(PotionEffectType.DOLPHINS_GRACE)) allowed += 0.20;
 
         if (horiz > (allowed + margin)) {
             if (++pd.speedStreak >= streakToFlag) {
-                flag(p, "JesusA", addVl, String.format("h=%.3f > %.3f (water)", horiz, allowed));
+                flag(p, "JesusA", addVl, String.format("h=%.3f > %.3f (%s)", horiz, allowed, headWater ? "swim" : "surface"));
                 requestSetback(p, pd, plugin.getConfig().getString("checks.JesusA.setback", "from"));
                 pd.speedStreak = streakToFlag;
             }
+        } else {
+            pd.speedStreak = Math.max(0, pd.speedStreak - 1);
         }
     }
 
@@ -362,6 +514,7 @@ public class MovementListener implements Listener {
         }
     }
 
+    // ===== flag & setback =====
     private void flag(Player p, String check, double addVl, String debug) {
         if (!checks.enabled(check)) return;
         vl.add(p.getUniqueId(), check, addVl, debug);
@@ -394,6 +547,8 @@ public class MovementListener implements Listener {
         p.setFallDistance(0.0f);
         pd.lastSetbackMs = now;
     }
+
+    // ===== helpers =====
 
     private boolean isSteppableBlockBelow(Player p) {
         Block b = p.getLocation().clone().subtract(0, 1, 0).getBlock();
