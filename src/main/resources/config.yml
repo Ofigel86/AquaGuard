@@ -18,6 +18,14 @@ penalties:
   min-total-vl-soft: 12
   min-total-vl-hard: 20
   max-ping-ms: 220
+  
+checks-toggles:
+  enabled-by-default: true
+  map: {}
+  
+bypass:
+  default-expire-mins: 1440
+  codes: []
 
 setback:
   enabled: true
@@ -149,4 +157,5 @@ checks:
   AttackIntervalB: { min-cps: 6.0, max-std-ms: 50.0, add-vl: 0.5, punish-threshold: 0 }
   AimSnapA: { window-ms: 150, max-dyaw: 120.0, max-dpitch: 60.0, add-vl: 0.5, punish-threshold: 0 }
   TargetSwitchC: { max-ms: 70, cone-deg: 6.0, add-vl: 1.0, punish-threshold: 0 }
+
 
