@@ -1,13 +1,9 @@
 package dev.aquaguard.checks;
 
 import dev.aquaguard.AquaGuard;
-
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Вкл/выкл отдельных чеков. Хранит состояние в config.yml (checks-toggles.map).
- */
 public class CheckManager {
     private final AquaGuard plugin;
     private final boolean defaultEnabled;
@@ -24,13 +20,8 @@ public class CheckManager {
         }
     }
 
-    public boolean enabled(String check) {
-        return map.getOrDefault(check, defaultEnabled);
-    }
-
-    public void toggle(String check) {
-        set(check, !enabled(check));
-    }
+    public boolean enabled(String check) { return map.getOrDefault(check, defaultEnabled); }
+    public void toggle(String check) { set(check, !enabled(check)); }
 
     public void set(String check, boolean on) {
         map.put(check, on);
