@@ -38,6 +38,7 @@ public class AgCommand implements CommandExecutor {
     @Override
     public boolean onCommand(CommandSender s, Command cmd, String label, String[] args) {
         if (args.length == 0) { sendHelp(s); return true; }
+
         switch (args[0].toLowerCase()) {
             case "ping" -> {
                 if (!auth(s)) return true;
@@ -46,11 +47,14 @@ public class AgCommand implements CommandExecutor {
                         + " | setback=" + (sb ? "on" : "off"));
                 return true;
             }
+
             case "gui" -> {
                 if (!auth(s)) return true;
-                if (s instanceof Player p) gui.openMain(p); else s.sendMessage("Только в игре.");
+                if (s instanceof Player p) gui.openMain(p);
+                else s.sendMessage("Только в игре.");
                 return true;
             }
+
             case "vl" -> {
                 if (!auth(s)) return true;
                 UUID target = null; String name = null;
@@ -63,17 +67,25 @@ public class AgCommand implements CommandExecutor {
                     }
                 } else if (s instanceof Player p) { target = p.getUniqueId(); name = p.getName(); }
                 if (target == null) { s.sendMessage("Игрок не найден."); return true; }
+
                 Map<String, Double> map = vl.get(target);
                 if (map.isEmpty()) { s.sendMessage("VL пуст для " + name); return true; }
+
                 s.sendMessage("VL для " + name + ":");
-                map.entrySet().stream().sorted(Comparator.comparingDouble(Map.Entry<String, Double>::getValue).reversed())
+                map.entrySet().stream()
+                        .sorted(Comparator.comparingDouble(Map.Entry<String, Double>::getValue).reversed())
                         .forEach(e -> s.sendMessage(" - " + e.getKey() + ": " + String.format("%.1f", e.getValue())));
                 s.sendMessage("Итого: " + String.format("%.1f", vl.total(target)));
                 return true;
             }
+
             case "penalties" -> {
                 if (!auth(s)) return true;
-                if (args.length < 2) { s.sendMessage("Текущий режим: " + penalties.mode().name().toLowerCase()); s.sendMessage("/" + label + " penalties <off|simulate|soft|hard>"); return true; }
+                if (args.length < 2) {
+                    s.sendMessage("Текущий режим: " + penalties.mode().name().toLowerCase());
+                    s.sendMessage("Использование: /" + label + " penalties <off|simulate|soft|hard>");
+                    return true;
+                }
                 switch (args[1].toLowerCase()) {
                     case "off" -> penalties.setMode(PenaltyManager.Mode.OFF);
                     case "simulate" -> penalties.setMode(PenaltyManager.Mode.SIMULATE);
@@ -84,34 +96,60 @@ public class AgCommand implements CommandExecutor {
                 s.sendMessage("Penalties: " + penalties.mode().name().toLowerCase());
                 return true;
             }
+
             case "setback" -> {
                 if (!auth(s)) return true;
-                if (args.length < 2) { boolean sb = plugin.getConfig().getBoolean("setback.enabled", true);
-                    s.sendMessage("Setback: " + (sb ? "on" : "off")); s.sendMessage("/" + label + " setback <on|off|toggle>"); return true; }
-                String v = args[1].toLowerCase(); boolean cur = plugin.getConfig().getBoolean("setback.enabled", true);
-                boolean next = switch (v) { case "on" -> true; case "off" -> false; case "toggle" -> !cur; default -> { s.sendMessage("on|off|toggle"); yield cur; } };
-                plugin.getConfig().set("setback.enabled", next); plugin.saveConfig();
-                s.sendMessage("Setback: " + (next ? "on" : "off")); return true;
+                if (args.length < 2) {
+                    boolean sb = plugin.getConfig().getBoolean("setback.enabled", true);
+                    s.sendMessage("Setback сейчас: " + (sb ? "on" : "off"));
+                    s.sendMessage("Использование: /" + label + " setback <on|off|toggle>");
+                    return true;
+                }
+                String v = args[1].toLowerCase();
+                boolean cur = plugin.getConfig().getBoolean("setback.enabled", true);
+                boolean next = switch (v) {
+                    case "on" -> true; case "off" -> false; case "toggle" -> !cur;
+                    default -> { s.sendMessage("on|off|toggle"); yield cur; }
+                };
+                plugin.getConfig().set("setback.enabled", next);
+                plugin.saveConfig();
+                s.sendMessage("Setback: " + (next ? "on" : "off"));
+                return true;
             }
+
             case "code" -> {
                 if (!(s instanceof Player p)) { s.sendMessage("Только в игре."); return true; }
                 if (args.length < 2) { s.sendMessage("Использование: /" + label + " code <секрет>"); return true; }
                 s.sendMessage(bypass.claimCode(p.getUniqueId(), args[1]) ? "Обход активирован." : "Неверный/использованный код.");
                 return true;
             }
+
             case "bypass" -> {
                 if (!auth(s)) return true;
-                if (args.length < 2) { s.sendMessage("/" + label + " bypass add <ник> [минуты|0]"); s.sendMessage("/" + label + " bypass remove <ник>"); s.sendMessage("/" + label + " bypass list"); return true; }
+                if (args.length < 2) {
+                    s.sendMessage("/" + label + " bypass add <ник> [минуты|0=бессрочно]");
+                    s.sendMessage("/" + label + " bypass remove <ник>");
+                    s.sendMessage("/" + label + " bypass list");
+                    return true;
+                }
                 switch (args[1].toLowerCase()) {
                     case "add" -> {
                         if (args.length < 3) { s.sendMessage("Укажи ник."); return true; }
-                        Player p = Bukkit.getPlayerExact(args[2]); if (p == null) { s.sendMessage("Игрок оффлайн."); return true; }
-                        long mins = (args.length >= 4) ? parseLong(args[3], plugin.getConfig().getInt("bypass.default-expire-mins", 1440)) : plugin.getConfig().getInt("bypass.default-expire-mins", 1440);
-                        bypass.addBypass(p.getUniqueId(), mins); s.sendMessage("Bypass выдан " + p.getName() + " на " + mins + " минут."); return true;
+                        Player p = Bukkit.getPlayerExact(args[2]);
+                        if (p == null) { s.sendMessage("Игрок оффлайн."); return true; }
+                        long mins = (args.length >= 4)
+                                ? parseLong(args[3], plugin.getConfig().getInt("bypass.default-expire-mins", 1440))
+                                : plugin.getConfig().getInt("bypass.default-expire-mins", 1440);
+                        bypass.addBypass(p.getUniqueId(), mins);
+                        s.sendMessage("Bypass выдан " + p.getName() + " на " + mins + " минут.");
+                        return true;
                     }
                     case "remove" -> {
                         if (args.length < 3) { s.sendMessage("Укажи ник."); return true; }
-                        OfflinePlayer op = Bukkit.getOfflinePlayer(args[2]); bypass.removeBypass(op.getUniqueId()); s.sendMessage("Bypass снят с " + op.getName()); return true;
+                        OfflinePlayer op = Bukkit.getOfflinePlayer(args[2]);
+                        bypass.removeBypass(op.getUniqueId());
+                        s.sendMessage("Bypass снят с " + op.getName());
+                        return true;
                     }
                     case "list" -> {
                         s.sendMessage("Активные обходы:");
@@ -125,22 +163,45 @@ public class AgCommand implements CommandExecutor {
                 }
                 return true;
             }
+
             case "checks" -> {
                 if (!auth(s)) return true;
                 if (args.length < 3) { s.sendMessage("Использование: /" + label + " checks <checkName> <on|off|toggle>"); return true; }
                 String chk = args[1], mode = args[2].toLowerCase();
-                switch (mode) { case "on" -> checks.set(chk, true); case "off" -> checks.set(chk, false); case "toggle" -> checks.toggle(chk); default -> { s.sendMessage("on|off|toggle"); return true; } }
-                s.sendMessage("Check " + chk + ": " + (checks.enabled(chk) ? "ON" : "OFF")); return true;
+                switch (mode) {
+                    case "on" -> checks.set(chk, true);
+                    case "off" -> checks.set(chk, false);
+                    case "toggle" -> checks.toggle(chk);
+                    default -> { s.sendMessage("on|off|toggle"); return true; }
+                }
+                s.sendMessage("Check " + chk + ": " + (checks.enabled(chk) ? "ON" : "OFF"));
+                return true;
             }
+
             case "freeze" -> {
                 if (!auth(s)) return true;
                 if (args.length < 2) { s.sendMessage("Использование: /" + label + " freeze <ник>"); return true; }
-                Player p = Bukkit.getPlayerExact(args[1]); if (p == null) { s.sendMessage("Игрок оффлайн."); return true; }
-                boolean ns = !freeze.is(p.getUniqueId()); freeze.set(p.getUniqueId(), ns);
-                s.sendMessage("Freeze " + p.getName() + ": " + (ns ? "ON" : "OFF")); return true;
+                Player p = Bukkit.getPlayerExact(args[1]);
+                if (p == null) { s.sendMessage("Игрок оффлайн."); return true; }
+                boolean ns = !freeze.is(p.getUniqueId());
+                freeze.set(p.getUniqueId(), ns);
+                s.sendMessage("Freeze " + p.getName() + ": " + (ns ? "ON" : "OFF"));
+                return true;
             }
-            case "reload" -> { if (!auth(s)) return true; plugin.reloadConfig(); s.sendMessage("AquaGuard config reloaded."); return true; }
-            case "whoami" -> { if (s instanceof Player p) s.sendMessage("Ты " + p.getName() + " UUID=" + p.getUniqueId()); else s.sendMessage("Консоль"); return true; }
+
+            case "reload" -> {
+                if (!auth(s)) return true;
+                plugin.reloadConfig();
+                s.sendMessage("AquaGuard config reloaded.");
+                return true;
+            }
+
+            case "whoami" -> {
+                if (s instanceof Player p) s.sendMessage("Ты " + p.getName() + " UUID=" + p.getUniqueId());
+                else s.sendMessage("Консоль");
+                return true;
+            }
+
             default -> { sendHelp(s); return true; }
         }
     }
