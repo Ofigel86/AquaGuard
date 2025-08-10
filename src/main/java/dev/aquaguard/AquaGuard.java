@@ -1,7 +1,11 @@
 package dev.aquaguard;
 
 import dev.aquaguard.bypass.BypassManager;
-import dev.aquaguard.checks.*;
+import dev.aquaguard.checks.CheckManager;
+import dev.aquaguard.checks.CombatListener;
+import dev.aquaguard.checks.MovementListener;
+import dev.aquaguard.checks.VelocityListener;
+import dev.aquaguard.checks.WorldListener;
 import dev.aquaguard.core.DataManager;
 import dev.aquaguard.core.ViolationManager;
 import dev.aquaguard.freeze.FreezeManager;
@@ -19,12 +23,10 @@ public class AquaGuard extends JavaPlugin {
     private PenaltyManager penaltyManager;
     private OwnerAccess ownerAccess;
 
-    // services
     private BypassManager bypassManager;
     private CheckManager checkManager;
     private FreezeManager freezeManager;
 
-    // gui
     private GuiManager guiManager;
 
     @Override
@@ -32,19 +34,16 @@ public class AquaGuard extends JavaPlugin {
         instance = this;
         saveDefaultConfig();
 
-        // core
         this.violationManager = new ViolationManager(this);
         this.violationManager.load();
         this.dataManager = new DataManager();
         this.penaltyManager = new PenaltyManager(this, violationManager);
         this.ownerAccess = new OwnerAccess(this);
 
-        // services
         this.bypassManager = new BypassManager(this);
         this.checkManager = new CheckManager(this);
         this.freezeManager = new FreezeManager();
 
-        // gui
         this.guiManager = new GuiManager(this, violationManager, penaltyManager, checkManager, bypassManager, freezeManager);
 
         var pm = getServer().getPluginManager();
@@ -63,7 +62,9 @@ public class AquaGuard extends JavaPlugin {
                 minute, minute);
 
         if (getCommand("ag") != null) {
-            getCommand("ag").setExecutor(new AgCommand(this, violationManager, penaltyManager, ownerAccess, guiManager, bypassManager, checkManager, freezeManager));
+            getCommand("ag").setExecutor(
+                    new AgCommand(this, violationManager, penaltyManager, ownerAccess, guiManager, bypassManager, checkManager, freezeManager)
+            );
         }
 
         getLogger().info("AquaGuard enabled.");
