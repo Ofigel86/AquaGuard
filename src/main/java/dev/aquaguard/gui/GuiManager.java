@@ -33,8 +33,10 @@ public class GuiManager implements Listener {
     private final BypassManager bypass;
     private final FreezeManager freeze;
 
-    public GuiManager(AquaGuard plugin, ViolationManager vl, PenaltyManager penalties, CheckManager checks, BypassManager bypass, FreezeManager freeze) {
-        this.plugin = plugin; this.vl = vl; this.penalties = penalties; this.checks = checks; this.bypass = bypass; this.freeze = freeze;
+    public GuiManager(AquaGuard plugin, ViolationManager vl, PenaltyManager penalties,
+                      CheckManager checks, BypassManager bypass, FreezeManager freeze) {
+        this.plugin = plugin; this.vl = vl; this.penalties = penalties;
+        this.checks = checks; this.bypass = bypass; this.freeze = freeze;
     }
 
     private enum MenuType { MAIN, PLAYERS, DETAIL, CHECKS, BYPASS }
@@ -45,9 +47,10 @@ public class GuiManager implements Listener {
         @Override public Inventory getInventory() { return null; }
     }
 
-    // state per viewer
+    // Персональные фильтры для вкладки Players
     private final Map<UUID, Boolean> playersFilterFlagged = new ConcurrentHashMap<>();
 
+    // ========== Открытие меню ==========
     public void openMain(Player p) {
         Inventory inv = Bukkit.createInventory(new Holder(MenuType.MAIN, 0, null), 27, "AquaGuard");
         inv.setItem(10, simple(Material.CHEST, ChatColor.GOLD + "Игроки (онлайн)", lore("Открыть список")));
@@ -56,19 +59,22 @@ public class GuiManager implements Listener {
         String mode = penalties.mode().name().toLowerCase();
         inv.setItem(16, simple(Material.IRON_SWORD, ChatColor.AQUA + "Penalties: " + mode, lore("Клик: сменить режим")));
         boolean sb = plugin.getConfig().getBoolean("setback.enabled", true);
-        inv.setItem(22, simple(sb ? Material.SLIME_BALL : Material.BARRIER, (sb ? ChatColor.GREEN : ChatColor.RED) + "Setback: " + (sb ? "ON" : "OFF"), lore("Клик: переключить")));
+        inv.setItem(22, simple(sb ? Material.SLIME_BALL : Material.BARRIER,
+                (sb ? ChatColor.GREEN : ChatColor.RED) + "Setback: " + (sb ? "ON" : "OFF"),
+                lore("Клик: переключить")));
         p.openInventory(inv);
     }
 
     public void openPlayers(Player p, int page) {
         boolean flaggedOnly = playersFilterFlagged.getOrDefault(p.getUniqueId(), false);
-
         Inventory inv = Bukkit.createInventory(new Holder(MenuType.PLAYERS, page, null), 54,
                 "AquaGuard | Players" + (flaggedOnly ? " (VL>0)" : ""));
+
         List<Player> players = Bukkit.getOnlinePlayers().stream()
                 .filter(pl -> !flaggedOnly || vl.total(pl.getUniqueId()) > 0.0)
                 .sorted(Comparator.comparingDouble((Player pl) -> -vl.total(pl.getUniqueId())))
                 .collect(Collectors.toList());
+
         int perPage = 45, start = page * perPage, end = Math.min(players.size(), start + perPage);
         for (int i = start, slot = 0; i < end && slot < 45; i++, slot++) {
             Player t = players.get(i);
@@ -84,12 +90,15 @@ public class GuiManager implements Listener {
             im.setLore(lore); head.setItemMeta(im);
             inv.setItem(slot, head);
         }
-        // toolbar
+
+        // Навигация/фильтр
         inv.setItem(45, simple(Material.ARROW, ChatColor.YELLOW + "←", null));
         inv.setItem(49, simple(Material.BARRIER, ChatColor.RED + "Назад", null));
         inv.setItem(53, simple(Material.ARROW, ChatColor.YELLOW + "→", null));
         inv.setItem(47, simple(flaggedOnly ? Material.LIME_DYE : Material.GRAY_DYE,
-                (flaggedOnly ? ChatColor.GREEN : ChatColor.DARK_RED) + "Только с VL>0", lore("Клик: переключить фильтр")));
+                (flaggedOnly ? ChatColor.GREEN : ChatColor.DARK_RED) + "Только с VL>0",
+                lore("Клик: переключить фильтр")));
+
         p.openInventory(inv);
     }
 
@@ -127,15 +136,18 @@ public class GuiManager implements Listener {
             String n = names.get(i);
             boolean en = checks.enabled(n);
             inv.setItem(slot, simple(en ? Material.LIME_DYE : Material.GRAY_DYE,
-                    (en ? ChatColor.GREEN : ChatColor.DARK_RED) + n, lore("Клик: переключить")));
+                    (en ? ChatColor.GREEN : ChatColor.DARK_RED) + n,
+                    lore("Клик: переключить")));
         }
-        // toolbar
+
+        // Массовые действия + навигация
         inv.setItem(36, simple(Material.ARROW, ChatColor.YELLOW + "←", null));
-        inv.setItem(37, simple(Material.GREEN_DYE, ChatColor.GREEN + "Only A", lore("Включить все *A, выключить *B/*C")));
+        inv.setItem(37, simple(Material.GREEN_DYE, ChatColor.GREEN + "Only A", lore("Включить все *A; выключить *B/*C")));
         inv.setItem(38, simple(Material.LIME_DYE, ChatColor.GREEN + "All ON", lore("Включить все чеки")));
         inv.setItem(39, simple(Material.GRAY_DYE, ChatColor.RED + "All OFF", lore("Выключить все чеки")));
         inv.setItem(40, simple(Material.BARRIER, ChatColor.RED + "Назад", null));
         inv.setItem(44, simple(Material.ARROW, ChatColor.YELLOW + "→", null));
+
         p.openInventory(inv);
     }
 
@@ -155,6 +167,7 @@ public class GuiManager implements Listener {
         p.openInventory(inv);
     }
 
+    // ========== Обработчик кликов ==========
     @EventHandler
     public void onClick(InventoryClickEvent e) {
         if (!(e.getWhoClicked() instanceof Player p)) return;
@@ -211,6 +224,7 @@ public class GuiManager implements Listener {
                 SkullMeta sm = (SkullMeta) it.getItemMeta();
                 OfflinePlayer op = sm.getOwningPlayer();
                 if (op == null) return;
+
                 if (click == ClickType.LEFT) {
                     openDetail(p, op.getUniqueId());
                 } else if (click == ClickType.RIGHT) {
@@ -236,7 +250,7 @@ public class GuiManager implements Listener {
         if (slot == 45) {
             Player t = Bukkit.getPlayer(target);
             if (t != null) { p.teleport(t.getLocation()); p.sendMessage(gray("TP к " + t.getName())); }
-            else p.sendMessage(ChatColor.RED + "Игрок офлайн.");
+            else p.sendMessage(ChatColor.RED + "Игрок оффлайн.");
         } else if (slot == 46) {
             boolean now = !freeze.is(target);
             freeze.set(target, now);
@@ -262,18 +276,9 @@ public class GuiManager implements Listener {
         if (slot == 40) { openMain(p); return; }
         if (slot == 36) { if (h.page > 0) openChecks(p, h.page - 1); return; }
         if (slot == 44) { openChecks(p, h.page + 1); return; }
-        if (slot == 37) { // Only A
-            for (String n : allCheckNames()) checks.set(n, n.endsWith("A"));
-            openChecks(p, h.page); return;
-        }
-        if (slot == 38) { // All ON
-            for (String n : allCheckNames()) checks.set(n, true);
-            openChecks(p, h.page); return;
-        }
-        if (slot == 39) { // All OFF
-            for (String n : allCheckNames()) checks.set(n, false);
-            openChecks(p, h.page); return;
-        }
+        if (slot == 37) { for (String n : allCheckNames()) checks.set(n, n.endsWith("A")); openChecks(p, h.page); return; }
+        if (slot == 38) { for (String n : allCheckNames()) checks.set(n, true); openChecks(p, h.page); return; }
+        if (slot == 39) { for (String n : allCheckNames()) checks.set(n, false); openChecks(p, h.page); return; }
         if (slot < 36) {
             ItemStack it = p.getOpenInventory().getTopInventory().getItem(slot);
             if (it == null || it.getItemMeta() == null) return;
@@ -299,8 +304,7 @@ public class GuiManager implements Listener {
         }
     }
 
-    // helpers
-
+    // ========== Helpers ==========
     private ItemStack simple(Material mat, String name, List<String> lore) {
         ItemStack it = new ItemStack(mat);
         ItemMeta im = it.getItemMeta();
@@ -324,15 +328,14 @@ public class GuiManager implements Listener {
     }
 
     private List<String> allCheckNames() {
-        // Список логических имён — добавляй свои тройки по мере реализации
         return Arrays.asList(
                 // Movement
                 "SpeedA","SpeedB","NoSlowA","FlyA","NoFallA","JesusA","StepA","PhaseA",
                 // World
                 "FastPlaceA","FastBreakA","ScaffoldA","TowerA","PlaceReachA","BreakReachA",
-                // Combat lite + KA
+                // Combat (KA lite)
                 "ReachA","WallHitA","AttackCooldownA","AttackIntervalB","AimSnapA","TargetSwitchC",
-                // AutoClicker lite (если есть)
+                // Misc
                 "AutoClickerA",
                 // AutoTotem
                 "AutoTotemA","AutoTotemB","AutoTotemC"
