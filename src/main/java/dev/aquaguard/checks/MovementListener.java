@@ -1,8 +1,28 @@
-// MovementListener.java (улучшенная версия) package dev.aquaguard.checks;
+package dev.aquaguard.checks;
 
-import dev.aquaguard.AquaGuard; import dev.aquaguard.bypass.BypassManager; import dev.aquaguard.core.DataManager; import dev.aquaguard.core.ViolationManager; import dev.aquaguard.freeze.FreezeManager; import org.bukkit.GameMode; import org.bukkit.Location; import org.bukkit.Material; import org.bukkit.Tag; import org.bukkit.World; import org.bukkit.block.Block; import org.bukkit.block.data.Waterlogged; import org.bukkit.enchantments.Enchantment; import org.bukkit.entity.Player; import org.bukkit.event.EventHandler; import org.bukkit.event.EventPriority; import org.bukkit.event.Listener; import org.bukkit.event.entity.EntityDamageEvent; import org.bukkit.event.player.PlayerMoveEvent; import org.bukkit.event.player.PlayerQuitEvent; import org.bukkit.inventory.ItemStack; import org.bukkit.potion.PotionEffect; import org.bukkit.potion.PotionEffectType;
-
-import java.util.Map; import java.util.UUID; import java.util.concurrent.ConcurrentHashMap;
+import dev.aquaguard.AquaGuard;
+import dev.aquaguard.bypass.BypassManager;
+import dev.aquaguard.core.DataManager;
+import dev.aquaguard.core.ViolationManager;
+import dev.aquaguard.freeze.FreezeManager; 
+import org.bukkit.GameMode; 
+import org.bukkit.Location; 
+import org.bukkit.Material; 
+import org.bukkit.Tag; 
+import org.bukkit.World; 
+import org.bukkit.block.Block; 
+import org.bukkit.block.data.Waterlogged; 
+import org.bukkit.enchantments.Enchantment; 
+import org.bukkit.entity.Player; 
+import org.bukkit.event.EventHandler; 
+import org.bukkit.event.EventPriority; 
+import org.bukkit.event.Listener; 
+import org.bukkit.event.entity.EntityDamageEvent; 
+import org.bukkit.event.player.PlayerMoveEvent; 
+import org.bukkit.event.player.PlayerQuitEvent; 
+import org.bukkit.inventory.ItemStack; 
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 
 public class MovementListener implements Listener { private final AquaGuard plugin; private final DataManager data; private final ViolationManager vl; private final CheckManager checks; private final BypassManager bypass; private final FreezeManager freeze;
 
@@ -647,3 +667,4 @@ private boolean isLandingExempt(Player p, Block feet, Block below) {
     return false;
 }
 }
+
