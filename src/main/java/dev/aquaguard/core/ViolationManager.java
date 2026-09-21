@@ -2,152 +2,154 @@ package dev.aquaguard.core;
 
 import dev.aquaguard.AquaGuard;
 import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Collections;
-import java.util.Locale;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Хранение VL (по каждому чеку), алерты и опциональный автокик по порогу.
- * - violations.yml: персистентность VL между рестартами
- * - add(uuid, check, amount, debug): начислить VL и отправить алерт
- * - maybePunish(uuid, check): кик по checks.<Check>.punish-threshold (если > 0)
+ * VL + имена. Старый violations.yml (uuid.check: number) читается и пишется в новом виде.
  */
-public class ViolationManager {
+public final class ViolationManager {
     private final AquaGuard plugin;
-    private final Map<UUID, Map<String, Double>> vls = new ConcurrentHashMap<>();
-
+    private final VlLedger ledger = new VlLedger();
+    private final Map<UUID, String> names = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> lastFlag = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> flagCount = new ConcurrentHashMap<>();
     private final File file;
-    private YamlConfiguration yml = new YamlConfiguration();
 
     public ViolationManager(AquaGuard plugin) {
         this.plugin = plugin;
         this.file = new File(plugin.getDataFolder(), "violations.yml");
     }
 
-    /**
-     * Начислить VL по конкретной проверке и отправить алерт стаффу.
-     */
-    public void add(UUID uuid, String check, double amount, String debug) {
-        Map<String, Double> m = vls.computeIfAbsent(uuid, k -> new ConcurrentHashMap<>());
-        double newVl = m.getOrDefault(check, 0.0) + amount;
-        m.put(check, newVl);
-
-        // Алерт по пермишену
-        String perm = plugin.getConfig().getString("alerts-permission", "ag.alerts");
-        String name = resolveName(uuid);
-        String msg = "AquaGuard | " + name + " flagged " + check
-                + " VL=" + String.format(Locale.US, "%.1f", newVl)
-                + " | " + debug;
-
-        Bukkit.getOnlinePlayers().stream()
-                .filter(p -> p.hasPermission(perm))
-                .forEach(p -> p.sendMessage(msg));
+    public double add(UUID uuid, String name, String check, double amount) {
+        if (name != null) names.put(uuid, name);
+        lastFlag.put(uuid, System.currentTimeMillis());
+        flagCount.merge(uuid, 1, Integer::sum);
+        return ledger.add(uuid, check, amount);
     }
 
-    /**
-     * Автокик по порогу для конкретного чека (если задан в конфиге).
-     * checks.<Check>.punish-threshold > 0 — включён.
-     */
-    public void maybePunish(UUID uuid, String check) {
-        double threshold = plugin.getConfig().getDouble("checks." + check + ".punish-threshold", 0.0);
-        if (threshold <= 0) return;
-
-        double cur = vls.getOrDefault(uuid, Collections.emptyMap()).getOrDefault(check, 0.0);
-        if (cur >= threshold) {
-            Player p = Bukkit.getPlayer(uuid);
-            if (p != null) {
-                p.kickPlayer("Kicked by AquaGuard (" + check + ")");
-            }
-        }
+    public double get(UUID uuid, String check) {
+        return ledger.get(uuid, check);
     }
 
-    /**
-     * Получить VL по всем чекам игрока (неизменяемая карта).
-     */
     public Map<String, Double> get(UUID uuid) {
-        return vls.getOrDefault(uuid, Collections.emptyMap());
+        return ledger.view(uuid);
     }
 
-    /**
-     * Суммарный VL игрока (по всем чекам).
-     */
     public double total(UUID uuid) {
-        Map<String, Double> m = vls.get(uuid);
-        if (m == null) return 0.0;
-        double s = 0.0;
-        for (double v : m.values()) s += v;
-        return s;
+        return ledger.total(uuid);
     }
 
-    /**
-     * Распад VL (minus amount) раз в N минут (настраивается в конфиге).
-     */
+    public void reset(UUID uuid) {
+        ledger.reset(uuid);
+        flagCount.remove(uuid);
+    }
+
+    public void reset(UUID uuid, String check) {
+        ledger.reset(uuid, check);
+    }
+
     public void decayAll(double amount) {
-        if (amount <= 0) return;
-        for (Map<String, Double> m : vls.values()) {
-            // проходим копией ключей, чтобы безопасно менять карту
-            for (Map.Entry<String, Double> e : m.entrySet().toArray(new Map.Entry[0])) {
-                double val = Math.max(0.0, e.getValue() - amount);
-                if (val == 0.0) m.remove(e.getKey());
-                else e.setValue(val);
-            }
-        }
+        ledger.decayAll(amount);
     }
 
-    /**
-     * Загрузить violations.yml (персист).
-     */
+    public String name(UUID uuid) {
+        Player online = Bukkit.getPlayer(uuid);
+        if (online != null) {
+            names.put(uuid, online.getName());
+            return online.getName();
+        }
+        String cached = names.get(uuid);
+        if (cached != null) return cached;
+        String offline = Bukkit.getOfflinePlayer(uuid).getName();
+        return offline != null ? offline : uuid.toString().substring(0, 8);
+    }
+
+    public long lastFlag(UUID uuid) {
+        return lastFlag.getOrDefault(uuid, 0L);
+    }
+
+    public int flagCount(UUID uuid) {
+        return flagCount.getOrDefault(uuid, 0);
+    }
+
+    public void maybeLegacyPunish(Player player, String check) {
+        double threshold = 0;
+        if (plugin.getConfig().contains("checks." + check + ".punish-threshold")) {
+            threshold = plugin.getConfig().getDouble("checks." + check + ".punish-threshold", 0);
+        } else if (plugin.getConfig().contains("checks.AutoTotem." + check + ".punish-threshold")) {
+            threshold = plugin.getConfig().getDouble("checks.AutoTotem." + check + ".punish-threshold", 0);
+        }
+        if (threshold <= 0 || player == null) return;
+        if (ledger.get(player.getUniqueId(), check) < threshold) return;
+        String reason = plugin.getConfig().getString("legacy-punish.reason",
+                "Kicked by AquaGuard (" + check + ")");
+        reason = reason.replace("%check%", check).replace("%player%", player.getName());
+        player.kickPlayer(reason);
+    }
+
     public void load() {
         if (!file.exists()) return;
         try {
-            yml.load(file);
+            YamlConfiguration yml = YamlConfiguration.loadConfiguration(file);
             for (String uid : yml.getKeys(false)) {
-                UUID uuid = UUID.fromString(uid);
-                Map<String, Double> map = new ConcurrentHashMap<>();
-                if (yml.isConfigurationSection(uid)) {
-                    for (String check : Objects.requireNonNull(yml.getConfigurationSection(uid)).getKeys(false)) {
-                        map.put(check, yml.getDouble(uid + "." + check));
+                UUID uuid;
+                try {
+                    uuid = UUID.fromString(uid);
+                } catch (IllegalArgumentException ex) {
+                    continue;
+                }
+                ConfigurationSection section = yml.getConfigurationSection(uid);
+                if (section == null) continue;
+                String name = section.getString("name");
+                if (name != null) names.put(uuid, name);
+                lastFlag.put(uuid, section.getLong("last-flag", 0));
+                flagCount.put(uuid, section.getInt("flag-count", 0));
+                Map<String, Double> values = new HashMap<>();
+                ConfigurationSection checks = section.getConfigurationSection("checks");
+                if (checks != null) {
+                    for (String check : checks.getKeys(false)) {
+                        values.put(check, checks.getDouble(check));
+                    }
+                } else {
+                    for (String key : section.getKeys(false)) {
+                        if (section.isDouble(key) || section.isInt(key)) values.put(key, section.getDouble(key));
                     }
                 }
-                vls.put(uuid, map);
+                ledger.load(uuid, values);
             }
         } catch (Exception ex) {
-            plugin.getLogger().warning("Failed to load violations.yml: " + ex.getMessage());
+            plugin.getLogger().warning("violations.yml: " + ex.getMessage());
         }
     }
 
-    /**
-     * Сохранить violations.yml (персист).
-     */
     public void save() {
         try {
-            yml = new YamlConfiguration();
-            for (Map.Entry<UUID, Map<String, Double>> e : vls.entrySet()) {
+            if (!file.getParentFile().exists() && !file.getParentFile().mkdirs() && !file.getParentFile().exists()) {
+                plugin.getLogger().warning("Не удалось создать папку данных");
+            }
+            YamlConfiguration yml = new YamlConfiguration();
+            for (Map.Entry<UUID, Map<String, Double>> e : ledger.snapshot().entrySet()) {
+                String base = e.getKey().toString();
+                String name = names.get(e.getKey());
+                if (name != null) yml.set(base + ".name", name);
+                yml.set(base + ".last-flag", lastFlag.getOrDefault(e.getKey(), 0L));
+                yml.set(base + ".flag-count", flagCount.getOrDefault(e.getKey(), 0));
                 for (Map.Entry<String, Double> c : e.getValue().entrySet()) {
-                    yml.set(e.getKey().toString() + "." + c.getKey(), c.getValue());
+                    yml.set(base + ".checks." + c.getKey(), c.getValue());
                 }
             }
             yml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().warning("Failed to save violations.yml: " + ex.getMessage());
+            plugin.getLogger().warning("Не удалось сохранить violations.yml: " + ex.getMessage());
         }
-    }
-
-    // ========== helpers ==========
-
-    private String resolveName(UUID uuid) {
-        Player online = Bukkit.getPlayer(uuid);
-        if (online != null) return online.getName();
-        OfflinePlayer op = Bukkit.getOfflinePlayer(uuid);
-        return op.getName() != null ? op.getName() : uuid.toString();
     }
 }

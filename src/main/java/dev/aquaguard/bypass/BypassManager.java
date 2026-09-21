@@ -5,124 +5,125 @@ import org.bukkit.configuration.file.YamlConfiguration;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.*;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Персональный обход античита на аккаунт (с истечением).
- * - bypass.yml: UUID -> until (ms). 0 = бессрочно.
- * - Коды из config.yml (bypass.codes): одноразовые, активируют обход на bypass.default-expire-mins минут.
- *
- * Конфиг:
- * bypass:
- *   default-expire-mins: 1440
- *   codes: []
- */
-public class BypassManager {
+public final class BypassManager {
+    private static final char[] ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toCharArray();
     private final AquaGuard plugin;
-    private final Map<UUID, Long> bypassUntil = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> until = new ConcurrentHashMap<>();
     private final Set<String> codes = Collections.synchronizedSet(new HashSet<>());
-
     private final File file;
-    private YamlConfiguration yml;
+    private final SecureRandom random = new SecureRandom();
 
     public BypassManager(AquaGuard plugin) {
         this.plugin = plugin;
         this.file = new File(plugin.getDataFolder(), "bypass.yml");
-        this.yml = new YamlConfiguration();
         load();
-
-        // одноразовые коды из конфига
-        codes.addAll(plugin.getConfig().getStringList("bypass.codes"));
     }
 
-    /**
-     * Активен ли обход у игрока.
-     */
     public boolean isBypassed(UUID id) {
-        Long until = bypassUntil.get(id);
-        if (until == null) return false;
-        if (until <= 0) return true;      // бессрочно
-        if (System.currentTimeMillis() > until) {
-            bypassUntil.remove(id);
+        Long exp = until.get(id);
+        if (exp == null) return false;
+        if (exp <= 0) return true;
+        if (System.currentTimeMillis() > exp) {
+            until.remove(id);
             save();
             return false;
         }
         return true;
     }
 
-    /**
-     * Выдать обход на minutes минут (0 = бессрочно).
-     */
     public void addBypass(UUID id, long minutes) {
-        long until = (minutes <= 0) ? 0L : (System.currentTimeMillis() + minutes * 60_000L);
-        bypassUntil.put(id, until);
+        long exp = minutes <= 0 ? 0L : System.currentTimeMillis() + minutes * 60_000L;
+        until.put(id, exp);
         save();
     }
 
-    /**
-     * Снять обход.
-     */
     public void removeBypass(UUID id) {
-        bypassUntil.remove(id);
+        until.remove(id);
         save();
     }
 
-    /**
-     * Список обходов (только чтение).
-     */
     public Map<UUID, Long> list() {
-        return Collections.unmodifiableMap(bypassUntil);
+        return Map.copyOf(until);
     }
 
-    /**
-     * Активировать обход по одноразовому коду из config.yml (bypass.codes).
-     * Возвращает true, если код действителен и был применён.
-     */
     public boolean claimCode(UUID id, String code) {
-        if (code == null || code.isEmpty()) return false;
+        if (code == null || code.isBlank()) return false;
+        String normalized = code.trim().toUpperCase(java.util.Locale.ROOT);
         synchronized (codes) {
-            if (!codes.contains(code)) return false;
-            codes.remove(code);
+            if (!codes.remove(normalized)) return false;
         }
-        int def = plugin.getConfig().getInt("bypass.default-expire-mins", 1440);
-        addBypass(id, def);
-
-        // Удалим код из конфигурации (чтобы не использовать повторно)
-        List<String> cfg = new ArrayList<>(plugin.getConfig().getStringList("bypass.codes"));
-        cfg.remove(code);
-        plugin.getConfig().set("bypass.codes", cfg);
-        plugin.saveConfig();
+        int minutes = plugin.getConfig().getInt("bypass.default-expire-mins", 1440);
+        addBypass(id, minutes);
+        save();
         return true;
     }
 
-    // ===== persist =====
+    public String createCode() {
+        StringBuilder builder = new StringBuilder(4 + 4 + 4 + 2);
+        for (int group = 0; group < 3; group++) {
+            if (group > 0) builder.append('-');
+            for (int i = 0; i < 4; i++) builder.append(ALPHABET[random.nextInt(ALPHABET.length)]);
+        }
+        String code = builder.toString();
+        synchronized (codes) {
+            codes.add(code);
+        }
+        save();
+        return code;
+    }
+
+    public void reloadCodes() {
+        load();
+    }
 
     private void load() {
-        if (!file.exists()) return;
-        try {
-            yml.load(file);
-            for (String uid : yml.getKeys(false)) {
-                try {
-                    UUID id = UUID.fromString(uid);
-                    long until = yml.getLong(uid + ".until", 0L);
-                    bypassUntil.put(id, until);
-                } catch (Exception ignored) {}
+        until.clear();
+        codes.clear();
+        if (file.exists()) {
+            YamlConfiguration yml = YamlConfiguration.loadConfiguration(file);
+            var players = yml.getConfigurationSection("players");
+            if (players != null) {
+                for (String uid : players.getKeys(false)) {
+                    try {
+                        until.put(UUID.fromString(uid), yml.getLong("players." + uid + ".until", 0));
+                    } catch (IllegalArgumentException ignored) {
+                    }
+                }
+            } else {
+                for (String uid : yml.getKeys(false)) {
+                    if (uid.equals("codes")) continue;
+                    try {
+                        until.put(UUID.fromString(uid), yml.getLong(uid + ".until", yml.getLong(uid, 0)));
+                    } catch (IllegalArgumentException ignored) {
+                    }
+                }
             }
-        } catch (Exception ex) {
-            plugin.getLogger().warning("Bypass load failed: " + ex.getMessage());
+            codes.addAll(yml.getStringList("codes"));
         }
+        if (codes.isEmpty()) codes.addAll(plugin.getConfig().getStringList("bypass.codes"));
     }
 
     private void save() {
+        YamlConfiguration yml = new YamlConfiguration();
+        for (Map.Entry<UUID, Long> e : until.entrySet()) {
+            yml.set("players." + e.getKey() + ".until", e.getValue());
+        }
+        yml.set("codes", new ArrayList<>(codes));
         try {
-            yml = new YamlConfiguration();
-            for (Map.Entry<UUID, Long> e : bypassUntil.entrySet()) {
-                yml.set(e.getKey().toString() + ".until", e.getValue());
-            }
+            if (!file.getParentFile().exists()) file.getParentFile().mkdirs();
             yml.save(file);
         } catch (IOException ex) {
-            plugin.getLogger().warning("Bypass save failed: " + ex.getMessage());
+            plugin.getLogger().warning("bypass.yml: " + ex.getMessage());
         }
     }
 }

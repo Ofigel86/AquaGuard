@@ -1,21 +1,58 @@
 name: AquaGuard
 main: dev.aquaguard.AquaGuard
-version: 0.3.0
+version: 1.0.0
 api-version: '1.21'
+author: AquaGuard
+description: Paper anti-cheat for movement, combat, world and player checks
+website: https://github.com/Ofigel86/AquaGuard
+softdepend: [PlaceholderAPI, LuckPerms, floodgate, Geyser-Spigot]
 
 commands:
   ag:
-    description: AquaGuard admin
-    usage: /ag <ping|gui|vl|penalties|setback|code|bypass|checks|freeze|reload|whoami>
-    permission: ag.admin
+    description: AquaGuard
+    usage: /ag help
+    aliases: [aquaguard, aqua]
 
 permissions:
+  ag.use:
+    description: Open the AquaGuard command so subcommands can answer themselves
+    default: true
   ag.admin:
-    description: Access to AquaGuard admin commands and GUI
+    description: Manage AquaGuard
     default: op
+    children:
+      ag.alerts: true
+      ag.gui: true
+      ag.freeze: true
+      ag.vl: true
+      ag.reload: true
+      ag.checks: true
+      ag.punish: true
+      ag.bypass.manage: true
   ag.alerts:
     description: See AquaGuard alerts
     default: op
+  ag.gui:
+    description: Open the AquaGuard GUI
+    default: op
+  ag.freeze:
+    description: Freeze players
+    default: op
+  ag.vl:
+    description: View violation levels
+    default: op
+  ag.reload:
+    description: Reload AquaGuard
+    default: op
+  ag.checks:
+    description: Toggle checks
+    default: op
+  ag.punish:
+    description: Run manual punishments
+    default: op
+  ag.bypass.manage:
+    description: Grant and revoke bypass
+    default: op
   ag.bypass:
-    description: Bypass AquaGuard penalties (damage nerf)
+    description: Skip AquaGuard checks and damage penalties
     default: false
