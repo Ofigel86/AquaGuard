@@ -1,344 +1,367 @@
 package dev.aquaguard.gui;
 
 import dev.aquaguard.AquaGuard;
-import dev.aquaguard.bypass.BypassManager;
-import dev.aquaguard.checks.CheckManager;
-import dev.aquaguard.core.ViolationManager;
-import dev.aquaguard.freeze.FreezeManager;
+import dev.aquaguard.checks.CheckCatalog;
+import dev.aquaguard.checks.CheckInfo;
+import dev.aquaguard.core.FlagRecord;
 import dev.aquaguard.penalty.PenaltyManager;
+import dev.aquaguard.util.Compat;
+import dev.aquaguard.util.Texts;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.Sound;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
 
-public class GuiManager implements Listener {
+public final class GuiManager implements Listener {
     private final AquaGuard plugin;
-    private final ViolationManager vl;
-    private final PenaltyManager penalties;
-    private final CheckManager checks;
-    private final BypassManager bypass;
-    private final FreezeManager freeze;
 
-    public GuiManager(AquaGuard plugin, ViolationManager vl, PenaltyManager penalties,
-                      CheckManager checks, BypassManager bypass, FreezeManager freeze) {
-        this.plugin = plugin; this.vl = vl; this.penalties = penalties;
-        this.checks = checks; this.bypass = bypass; this.freeze = freeze;
+    public GuiManager(AquaGuard plugin) {
+        this.plugin = plugin;
     }
 
-    private enum MenuType { MAIN, PLAYERS, DETAIL, CHECKS, BYPASS }
+    private enum Menu { MAIN, PLAYERS, DETAIL, CHECKS, BYPASS, HISTORY }
 
-    private static class Holder implements InventoryHolder {
-        final MenuType type; final int page; final UUID target;
-        Holder(MenuType type, int page, UUID target) { this.type = type; this.page = page; this.target = target; }
+    private static final class Holder implements InventoryHolder {
+        final Menu menu;
+        final int page;
+        final UUID target;
+        final CheckInfo.Category category;
+        Holder(Menu menu, int page, UUID target, CheckInfo.Category category) {
+            this.menu = menu;
+            this.page = page;
+            this.target = target;
+            this.category = category;
+        }
         @Override public Inventory getInventory() { return null; }
     }
 
-    // Персональные фильтры для вкладки Players
-    private final Map<UUID, Boolean> playersFilterFlagged = new ConcurrentHashMap<>();
-
-    // ========== Открытие меню ==========
-    public void openMain(Player p) {
-        Inventory inv = Bukkit.createInventory(new Holder(MenuType.MAIN, 0, null), 27, "AquaGuard");
-        inv.setItem(10, simple(Material.CHEST, ChatColor.GOLD + "Игроки (онлайн)", lore("Открыть список")));
-        inv.setItem(12, simple(Material.BOOK, ChatColor.YELLOW + "Чеки", lore("Вкл/выкл проверок")));
-        inv.setItem(14, simple(Material.NAME_TAG, ChatColor.AQUA + "Bypass", lore("Управление обходами")));
-        String mode = penalties.mode().name().toLowerCase();
-        inv.setItem(16, simple(Material.IRON_SWORD, ChatColor.AQUA + "Penalties: " + mode, lore("Клик: сменить режим")));
-        boolean sb = plugin.getConfig().getBoolean("setback.enabled", true);
-        inv.setItem(22, simple(sb ? Material.SLIME_BALL : Material.BARRIER,
-                (sb ? ChatColor.GREEN : ChatColor.RED) + "Setback: " + (sb ? "ON" : "OFF"),
-                lore("Клик: переключить")));
-        p.openInventory(inv);
+    public void openMain(Player player) {
+        Inventory inv = Bukkit.createInventory(new Holder(Menu.MAIN, 0, null, null), 45, title("AquaGuard"));
+        fill(inv, Material.GRAY_STAINED_GLASS_PANE);
+        inv.setItem(10, item(Material.PLAYER_HEAD, "&eИгроки", "Онлайн, VL, пинг"));
+        inv.setItem(12, item(Material.COMPARATOR, "&aЧеки", plugin.checks().enabledCount() + " включено"));
+        inv.setItem(14, item(Material.NAME_TAG, "&bBypass", "Временный обход"));
+        inv.setItem(16, item(Material.PAPER, "&6Последние флаги", "История с рестарта"));
+        String mode = plugin.penalties().mode().name().toLowerCase(Locale.ROOT);
+        inv.setItem(28, item(Material.IRON_SWORD, "&cPenalties: &f" + mode, "ЛКМ: следующий режим"));
+        boolean sb = plugin.settings().setbackEnabled();
+        inv.setItem(30, item(sb ? Material.SLIME_BALL : Material.BARRIER, (sb ? "&a" : "&c") + "Setback: " + (sb ? "ON" : "OFF"), "ЛКМ: переключить"));
+        boolean alerts = plugin.alerts().alertsOn(player);
+        inv.setItem(32, item(alerts ? Material.BELL : Material.REDSTONE_TORCH, (alerts ? "&a" : "&c") + "Алерты: " + (alerts ? "ON" : "OFF"), "Только для тебя"));
+        inv.setItem(34, item(Material.BOOK, "&fСтатус",
+                "TPS " + String.format(Locale.US, "%.1f", Compat.tps()),
+                "Наказания " + (plugin.punishments().enabled() ? plugin.punishments().mode() : "off"),
+                "Флагов " + plugin.stats().totalFlags()));
+        inv.setItem(40, item(Material.REDSTONE, "&eПерезагрузить", "config + toggles + messages"));
+        player.openInventory(inv);
+        click(player);
     }
 
-    public void openPlayers(Player p, int page) {
-        boolean flaggedOnly = playersFilterFlagged.getOrDefault(p.getUniqueId(), false);
-        Inventory inv = Bukkit.createInventory(new Holder(MenuType.PLAYERS, page, null), 54,
-                "AquaGuard | Players" + (flaggedOnly ? " (VL>0)" : ""));
-
-        List<Player> players = Bukkit.getOnlinePlayers().stream()
-                .filter(pl -> !flaggedOnly || vl.total(pl.getUniqueId()) > 0.0)
-                .sorted(Comparator.comparingDouble((Player pl) -> -vl.total(pl.getUniqueId())))
-                .collect(Collectors.toList());
-
-        int perPage = 45, start = page * perPage, end = Math.min(players.size(), start + perPage);
-        for (int i = start, slot = 0; i < end && slot < 45; i++, slot++) {
-            Player t = players.get(i);
-            boolean fz = freeze.is(t.getUniqueId());
-            boolean bp = bypass.isBypassed(t.getUniqueId());
-            ItemStack head = playerHead(t.getUniqueId(),
-                    (bp ? "§b" : "") + (fz ? "§c" : "") + t.getName(),
-                    vl.total(t.getUniqueId()));
-            ItemMeta im = head.getItemMeta();
-            List<String> lore = new ArrayList<>();
-            lore.add(gray("VL: " + String.format(Locale.US, "%.1f", vl.total(t.getUniqueId()))));
-            lore.add(gray("ЛКМ: детали | ПКМ: Freeze | Shift+ПКМ: Bypass"));
-            im.setLore(lore); head.setItemMeta(im);
+    public void openPlayers(Player player, int page) {
+        Inventory inv = Bukkit.createInventory(new Holder(Menu.PLAYERS, page, null, null), 54, title("Игроки"));
+        List<Player> online = new ArrayList<>(Bukkit.getOnlinePlayers());
+        online.sort((a, b) -> Double.compare(plugin.violations().total(b.getUniqueId()), plugin.violations().total(a.getUniqueId())));
+        int per = 45;
+        int start = Math.max(0, page) * per;
+        for (int i = start, slot = 0; i < online.size() && slot < per; i++, slot++) {
+            Player target = online.get(i);
+            double vl = plugin.violations().total(target.getUniqueId());
+            boolean frozen = plugin.freeze().isFrozen(target.getUniqueId());
+            boolean bypass = plugin.bypass().isBypassed(target.getUniqueId());
+            ItemStack head = head(target.getUniqueId(), (frozen ? "&c" : bypass ? "&b" : "&f") + target.getName(),
+                    "VL " + fmt(vl),
+                    "Пинг " + Compat.ping(target) + " · " + target.getWorld().getName(),
+                    "ЛКМ детали · ПКМ freeze · Shift+ПКМ bypass");
             inv.setItem(slot, head);
         }
-
-        // Навигация/фильтр
-        inv.setItem(45, simple(Material.ARROW, ChatColor.YELLOW + "←", null));
-        inv.setItem(49, simple(Material.BARRIER, ChatColor.RED + "Назад", null));
-        inv.setItem(53, simple(Material.ARROW, ChatColor.YELLOW + "→", null));
-        inv.setItem(47, simple(flaggedOnly ? Material.LIME_DYE : Material.GRAY_DYE,
-                (flaggedOnly ? ChatColor.GREEN : ChatColor.DARK_RED) + "Только с VL>0",
-                lore("Клик: переключить фильтр")));
-
-        p.openInventory(inv);
+        inv.setItem(45, item(Material.ARROW, "&eНазад", null));
+        inv.setItem(49, item(Material.BARRIER, "&cМеню", null));
+        inv.setItem(53, item(Material.ARROW, "&eДальше", null));
+        player.openInventory(inv);
     }
 
     public void openDetail(Player viewer, UUID target) {
-        OfflinePlayer op = Bukkit.getOfflinePlayer(target);
-        String name = op.getName() != null ? op.getName() : target.toString();
-        Inventory inv = Bukkit.createInventory(new Holder(MenuType.DETAIL, 0, target), 54, "AquaGuard | " + name);
-
-        inv.setItem(4, playerHead(target, name, vl.total(target)));
-
-        List<Map.Entry<String, Double>> list = new ArrayList<>(vl.get(target).entrySet());
-        list.sort(Comparator.comparingDouble((Map.Entry<String, Double> e) -> -e.getValue()));
+        OfflinePlayer offline = Bukkit.getOfflinePlayer(target);
+        String name = offline.getName() == null ? target.toString().substring(0, 8) : offline.getName();
+        Inventory inv = Bukkit.createInventory(new Holder(Menu.DETAIL, 0, target, null), 54, title(name));
+        Player online = Bukkit.getPlayer(target);
+        List<String> lore = new ArrayList<>();
+        lore.add("VL " + fmt(plugin.violations().total(target)));
+        if (online != null) {
+            lore.add("Пинг " + Compat.ping(online) + " · " + online.getGameMode().name().toLowerCase(Locale.ROOT));
+            lore.add(online.getWorld().getName());
+            String brand = plugin.data().peek(target) == null ? "" : plugin.data().peek(target).clientBrand;
+            if (brand != null && !brand.isBlank()) lore.add(brand);
+        } else lore.add("&8оффлайн");
+        inv.setItem(4, head(target, "&f" + name, lore.toArray(String[]::new)));
+        List<java.util.Map.Entry<String, Double>> vls = new ArrayList<>(plugin.violations().get(target).entrySet());
+        vls.sort(Comparator.comparingDouble(e -> -e.getValue()));
         int slot = 9;
-        for (var e : list) {
-            if (slot >= 44) break;
-            inv.setItem(slot++, simple(Material.PAPER,
-                    ChatColor.GOLD + e.getKey() + ChatColor.GRAY + " | VL " + ChatColor.WHITE + String.format(Locale.US, "%.1f", e.getValue()),
-                    null));
+        for (var e : vls) {
+            if (slot >= 36) break;
+            inv.setItem(slot++, item(Material.PAPER, "&6" + e.getKey() + " &7" + fmt(e.getValue()), "Shift+ЛКМ сбросить этот чек"));
         }
-
-        inv.setItem(45, simple(Material.ENDER_PEARL, ChatColor.AQUA + "TP к игроку", null));
-        inv.setItem(46, simple(Material.PACKED_ICE, ChatColor.LIGHT_PURPLE + "Freeze: toggle", null));
-        inv.setItem(47, simple(Material.NAME_TAG, ChatColor.AQUA + "Bypass: toggle", null));
-        inv.setItem(48, simple(Material.BOOK, ChatColor.YELLOW + "Показать VL в чат", null));
-        inv.setItem(49, simple(Material.BARRIER, ChatColor.RED + "Назад", null));
+        inv.setItem(45, item(Material.ENDER_PEARL, "&bТелепорт", null));
+        inv.setItem(46, item(Material.PACKED_ICE, "&dFreeze", null));
+        inv.setItem(47, item(Material.NAME_TAG, "&bBypass 24ч", null));
+        inv.setItem(48, item(Material.BARRIER, "&cСбросить VL", "Shift+ЛКМ"));
+        inv.setItem(50, item(Material.IRON_DOOR, "&cКик", null));
+        inv.setItem(49, item(Material.ARROW, "&eНазад", null));
         viewer.openInventory(inv);
     }
 
-    public void openChecks(Player p, int page) {
-        Inventory inv = Bukkit.createInventory(new Holder(MenuType.CHECKS, page, null), 54, "AquaGuard | Checks");
-        List<String> names = allCheckNames();
-        int perPage = 36, start = page * perPage, end = Math.min(names.size(), start + perPage);
-        int slot = 0;
-        for (int i = start; i < end && slot < 36; i++, slot++) {
-            String n = names.get(i);
-            boolean en = checks.enabled(n);
-            inv.setItem(slot, simple(en ? Material.LIME_DYE : Material.GRAY_DYE,
-                    (en ? ChatColor.GREEN : ChatColor.DARK_RED) + n,
-                    lore("Клик: переключить")));
+    public void openChecks(Player player, int page, CheckInfo.Category category) {
+        Inventory inv = Bukkit.createInventory(new Holder(Menu.CHECKS, page, null, category), 54,
+                title(category == null ? "Чеки" : category.title()));
+        List<CheckInfo> list = CheckCatalog.byCategory(category);
+        int start = Math.max(0, page) * 36;
+        for (int i = start, slot = 0; i < list.size() && slot < 36; i++, slot++) {
+            CheckInfo info = list.get(i);
+            boolean on = plugin.checks().enabled(info.id());
+            inv.setItem(slot, item(on ? Material.LIME_DYE : Material.GRAY_DYE,
+                    (on ? "&a" : "&c") + info.id() + (info.experimental() ? " &8exp" : ""),
+                    info.description(), "ЛКМ переключить"));
         }
-
-        // Массовые действия + навигация
-        inv.setItem(36, simple(Material.ARROW, ChatColor.YELLOW + "←", null));
-        inv.setItem(37, simple(Material.GREEN_DYE, ChatColor.GREEN + "Only A", lore("Включить все *A; выключить *B/*C")));
-        inv.setItem(38, simple(Material.LIME_DYE, ChatColor.GREEN + "All ON", lore("Включить все чеки")));
-        inv.setItem(39, simple(Material.GRAY_DYE, ChatColor.RED + "All OFF", lore("Выключить все чеки")));
-        inv.setItem(40, simple(Material.BARRIER, ChatColor.RED + "Назад", null));
-        inv.setItem(44, simple(Material.ARROW, ChatColor.YELLOW + "→", null));
-
-        p.openInventory(inv);
+        inv.setItem(36, item(Material.ARROW, "&eНазад", null));
+        inv.setItem(37, item(Material.LIME_DYE, "&aСтабильные", "Включить проверенные, выключить экспериментальные"));
+        inv.setItem(38, item(Material.GREEN_DYE, "&aВсе ON", null));
+        inv.setItem(39, item(Material.GRAY_DYE, "&cВсе OFF", null));
+        inv.setItem(40, item(Material.BARRIER, "&cМеню", null));
+        inv.setItem(41, item(category == CheckInfo.Category.MOVEMENT ? Material.FEATHER : Material.WHITE_DYE, "&fДвижение", null));
+        inv.setItem(42, item(category == CheckInfo.Category.COMBAT ? Material.IRON_SWORD : Material.WHITE_DYE, "&fБой", null));
+        inv.setItem(43, item(category == CheckInfo.Category.WORLD ? Material.GRASS_BLOCK : Material.WHITE_DYE, "&fМир", null));
+        inv.setItem(44, item(Material.ARROW, "&eДальше", null));
+        inv.setItem(45, item(category == CheckInfo.Category.PLAYER ? Material.PLAYER_HEAD : Material.WHITE_DYE, "&fИгрок", null));
+        inv.setItem(46, item(category == null ? Material.LIME_DYE : Material.WHITE_DYE, "&fВсе", null));
+        player.openInventory(inv);
     }
 
-    public void openBypass(Player p) {
-        Inventory inv = Bukkit.createInventory(new Holder(MenuType.BYPASS, 0, null), 54, "AquaGuard | Bypass");
+    public void openBypass(Player player) {
+        Inventory inv = Bukkit.createInventory(new Holder(Menu.BYPASS, 0, null, null), 54, title("Bypass"));
         int slot = 0;
-        for (Player t : Bukkit.getOnlinePlayers()) {
-            boolean on = bypass.isBypassed(t.getUniqueId());
-            ItemStack it = playerHead(t.getUniqueId(), (on ? "§a" : "§c") + t.getName(), 0.0);
-            ItemMeta im = it.getItemMeta();
-            im.setLore(lore("Клик: " + (on ? "снять" : "выдать") + " обход"));
-            it.setItemMeta(im);
-            inv.setItem(slot++, it);
+        for (Player target : Bukkit.getOnlinePlayers()) {
             if (slot >= 45) break;
+            boolean on = plugin.bypass().isBypassed(target.getUniqueId());
+            inv.setItem(slot++, head(target.getUniqueId(), (on ? "&a" : "&c") + target.getName(), on ? "ЛКМ снять" : "ЛКМ выдать на 24ч"));
         }
-        inv.setItem(49, simple(Material.BARRIER, ChatColor.RED + "Назад", null));
-        p.openInventory(inv);
+        inv.setItem(49, item(Material.BARRIER, "&cМеню", null));
+        player.openInventory(inv);
     }
 
-    // ========== Обработчик кликов ==========
+    public void openHistory(Player player) {
+        Inventory inv = Bukkit.createInventory(new Holder(Menu.HISTORY, 0, null, null), 54, title("Флаги"));
+        List<FlagRecord> recent = plugin.history().recent(45);
+        int slot = 0;
+        for (FlagRecord record : recent) {
+            inv.setItem(slot++, item(Material.PAPER, "&c" + record.check() + " &f" + record.name(),
+                    "VL " + fmt(record.vl()) + " · ping " + record.ping(),
+                    record.world(),
+                    record.debug()));
+        }
+        inv.setItem(49, item(Material.BARRIER, "&cМеню", null));
+        player.openInventory(inv);
+    }
+
     @EventHandler
-    public void onClick(InventoryClickEvent e) {
-        if (!(e.getWhoClicked() instanceof Player p)) return;
-        if (!(e.getInventory().getHolder() instanceof Holder h)) return;
-        e.setCancelled(true);
-
-        int slot = e.getRawSlot();
-        ClickType click = e.getClick();
-
-        switch (h.type) {
-            case MAIN -> handleMain(p, slot);
-            case PLAYERS -> handlePlayers(p, h, slot, click);
-            case DETAIL -> handleDetail(p, h, slot);
-            case CHECKS -> handleChecks(p, h, slot);
-            case BYPASS -> handleBypass(p, h, slot);
-        }
-    }
-
-    private void handleMain(Player p, int slot) {
-        if (slot == 10) openPlayers(p, 0);
-        else if (slot == 12) openChecks(p, 0);
-        else if (slot == 14) openBypass(p);
-        else if (slot == 16) {
-            PenaltyManager.Mode m = penalties.mode();
-            PenaltyManager.Mode next = switch (m) {
-                case OFF -> PenaltyManager.Mode.SIMULATE;
-                case SIMULATE -> PenaltyManager.Mode.SOFT;
-                case SOFT -> PenaltyManager.Mode.HARD;
-                case HARD -> PenaltyManager.Mode.OFF;
-            };
-            penalties.setMode(next);
-            openMain(p);
-        } else if (slot == 22) {
-            boolean sb = plugin.getConfig().getBoolean("setback.enabled", true);
-            plugin.getConfig().set("setback.enabled", !sb);
-            plugin.saveConfig();
-            openMain(p);
-        }
-    }
-
-    private void handlePlayers(Player p, Holder h, int slot, ClickType click) {
-        if (slot == 49) { openMain(p); return; }
-        if (slot == 45) { if (h.page > 0) openPlayers(p, h.page - 1); return; }
-        if (slot == 53) { openPlayers(p, h.page + 1); return; }
-        if (slot == 47) {
-            boolean cur = playersFilterFlagged.getOrDefault(p.getUniqueId(), false);
-            playersFilterFlagged.put(p.getUniqueId(), !cur);
-            openPlayers(p, 0);
+    public void onClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        if (!(event.getInventory().getHolder() instanceof Holder holder)) return;
+        event.setCancelled(true);
+        if (!plugin.owner().isOwner(player)) {
+            player.closeInventory();
+            plugin.messages().send(player, "no-permission");
             return;
         }
-        if (slot < 45) {
-            ItemStack it = p.getOpenInventory().getTopInventory().getItem(slot);
-            if (it != null && it.getType() == Material.PLAYER_HEAD) {
-                SkullMeta sm = (SkullMeta) it.getItemMeta();
-                OfflinePlayer op = sm.getOwningPlayer();
-                if (op == null) return;
+        if (event.getRawSlot() < 0 || event.getRawSlot() >= event.getInventory().getSize()) return;
+        switch (holder.menu) {
+            case MAIN -> main(player, event.getRawSlot());
+            case PLAYERS -> players(player, holder, event.getRawSlot(), event.getClick());
+            case DETAIL -> detail(player, holder, event.getRawSlot(), event.getClick(), event.getCurrentItem());
+            case CHECKS -> checks(player, holder, event.getRawSlot(), event.getCurrentItem());
+            case BYPASS -> bypass(player, event.getRawSlot());
+            case HISTORY -> { if (event.getRawSlot() == 49) openMain(player); }
+        }
+    }
 
-                if (click == ClickType.LEFT) {
-                    openDetail(p, op.getUniqueId());
-                } else if (click == ClickType.RIGHT) {
-                    boolean now = !freeze.is(op.getUniqueId());
-                    freeze.set(op.getUniqueId(), now);
-                    p.sendMessage(gray("Freeze " + op.getName() + ": " + (now ? "ON" : "OFF")));
-                    openPlayers(p, h.page);
-                } else if (click == ClickType.SHIFT_RIGHT) {
-                    boolean on = bypass.isBypassed(op.getUniqueId());
-                    if (on) bypass.removeBypass(op.getUniqueId());
-                    else bypass.addBypass(op.getUniqueId(), plugin.getConfig().getInt("bypass.default-expire-mins", 1440));
-                    p.sendMessage(gray("Bypass " + op.getName() + ": " + (!on ? "ON" : "OFF")));
-                    openPlayers(p, h.page);
-                }
+    @EventHandler
+    public void onDrag(InventoryDragEvent event) {
+        if (event.getInventory().getHolder() instanceof Holder) event.setCancelled(true);
+    }
+
+    private void main(Player player, int slot) {
+        switch (slot) {
+            case 10 -> openPlayers(player, 0);
+            case 12 -> openChecks(player, 0, null);
+            case 14 -> openBypass(player);
+            case 16 -> openHistory(player);
+            case 28 -> {
+                PenaltyManager.Mode next = switch (plugin.penalties().mode()) {
+                    case OFF -> PenaltyManager.Mode.SIMULATE;
+                    case SIMULATE -> PenaltyManager.Mode.SOFT;
+                    case SOFT -> PenaltyManager.Mode.HARD;
+                    case HARD -> PenaltyManager.Mode.OFF;
+                };
+                plugin.penalties().setMode(next);
+                openMain(player);
+            }
+            case 30 -> {
+                plugin.settings().setSetbackEnabled(!plugin.settings().setbackEnabled());
+                openMain(player);
+            }
+            case 32 -> {
+                plugin.alerts().toggle(player);
+                openMain(player);
+            }
+            case 40 -> {
+                plugin.reloadAll();
+                plugin.messages().send(player, "reloaded");
+                openMain(player);
+            }
+            default -> { }
+        }
+    }
+
+    private void players(Player player, Holder holder, int slot, ClickType click) {
+        if (slot == 49) { openMain(player); return; }
+        if (slot == 45 && holder.page > 0) { openPlayers(player, holder.page - 1); return; }
+        if (slot == 53) { openPlayers(player, holder.page + 1); return; }
+        UUID id = headId(player, slot);
+        if (id == null) return;
+        if (click == ClickType.RIGHT) {
+            plugin.freeze().toggle(id);
+            openPlayers(player, holder.page);
+        } else if (click == ClickType.SHIFT_RIGHT) {
+            if (plugin.bypass().isBypassed(id)) plugin.bypass().removeBypass(id);
+            else plugin.bypass().addBypass(id, plugin.getConfig().getInt("bypass.default-expire-mins", 1440));
+            openPlayers(player, holder.page);
+        } else openDetail(player, id);
+    }
+
+    private void detail(Player player, Holder holder, int slot, ClickType click, ItemStack current) {
+        UUID target = holder.target;
+        if (target == null || slot == 49) { openPlayers(player, 0); return; }
+        Player online = Bukkit.getPlayer(target);
+        if (slot == 45 && online != null) player.teleport(online.getLocation());
+        else if (slot == 46) { plugin.freeze().toggle(target); openDetail(player, target); }
+        else if (slot == 47) {
+            if (plugin.bypass().isBypassed(target)) plugin.bypass().removeBypass(target);
+            else plugin.bypass().addBypass(target, plugin.getConfig().getInt("bypass.default-expire-mins", 1440));
+            openDetail(player, target);
+        } else if (slot == 48 && click.isShiftClick()) {
+            plugin.violations().reset(target);
+            plugin.punishments().clear(target);
+            plugin.messages().send(player, "vl-reset", "player", plugin.violations().name(target));
+            openDetail(player, target);
+        } else if (slot == 50 && online != null) {
+            online.kickPlayer("AquaGuard");
+            player.closeInventory();
+        } else if (slot >= 9 && slot < 36 && click.isShiftClick() && current != null && current.hasItemMeta()) {
+            String name = ChatColor.stripColor(current.getItemMeta().getDisplayName());
+            if (name != null) {
+                String check = name.split(" ")[0];
+                plugin.violations().reset(target, check);
+                openDetail(player, target);
             }
         }
     }
 
-    private void handleDetail(Player p, Holder h, int slot) {
-        UUID target = h.target;
-        if (target == null) { openPlayers(p, 0); return; }
-        if (slot == 49) { openPlayers(p, 0); return; }
-        if (slot == 45) {
-            Player t = Bukkit.getPlayer(target);
-            if (t != null) { p.teleport(t.getLocation()); p.sendMessage(gray("TP к " + t.getName())); }
-            else p.sendMessage(ChatColor.RED + "Игрок оффлайн.");
-        } else if (slot == 46) {
-            boolean now = !freeze.is(target);
-            freeze.set(target, now);
-            p.sendMessage(gray("Freeze: " + (now ? "ON" : "OFF")));
-            openDetail(p, target);
-        } else if (slot == 47) {
-            boolean on = bypass.isBypassed(target);
-            if (on) bypass.removeBypass(target);
-            else bypass.addBypass(target, plugin.getConfig().getInt("bypass.default-expire-mins", 1440));
-            p.sendMessage(gray("Bypass: " + (!on ? "ON" : "OFF")));
-            openDetail(p, target);
-        } else if (slot == 48) {
-            double total = vl.total(target);
-            p.sendMessage(ChatColor.GOLD + "VL: " + ChatColor.WHITE + String.format(Locale.US, "%.1f", total));
-            vl.get(target).entrySet().stream()
-                    .sorted(Comparator.comparingDouble(Map.Entry<String, Double>::getValue).reversed())
-                    .limit(10)
-                    .forEach(e -> p.sendMessage(" - " + e.getKey() + ": " + String.format(Locale.US, "%.1f", e.getValue())));
+    private void checks(Player player, Holder holder, int slot, ItemStack current) {
+        if (slot == 40) { openMain(player); return; }
+        if (slot == 36 && holder.page > 0) { openChecks(player, holder.page - 1, holder.category); return; }
+        if (slot == 44) { openChecks(player, holder.page + 1, holder.category); return; }
+        if (slot == 37) { plugin.checks().setStableOnly(); openChecks(player, holder.page, holder.category); return; }
+        if (slot == 38) { plugin.checks().setAll(true); openChecks(player, holder.page, holder.category); return; }
+        if (slot == 39) { plugin.checks().setAll(false); openChecks(player, holder.page, holder.category); return; }
+        if (slot == 41) { openChecks(player, 0, CheckInfo.Category.MOVEMENT); return; }
+        if (slot == 42) { openChecks(player, 0, CheckInfo.Category.COMBAT); return; }
+        if (slot == 43) { openChecks(player, 0, CheckInfo.Category.WORLD); return; }
+        if (slot == 45) { openChecks(player, 0, CheckInfo.Category.PLAYER); return; }
+        if (slot == 46) { openChecks(player, 0, null); return; }
+        if (slot < 36 && current != null && current.hasItemMeta()) {
+            String name = ChatColor.stripColor(current.getItemMeta().getDisplayName());
+            if (name != null) plugin.checks().toggle(name.replace(" exp", "").trim());
+            openChecks(player, holder.page, holder.category);
         }
     }
 
-    private void handleChecks(Player p, Holder h, int slot) {
-        if (slot == 40) { openMain(p); return; }
-        if (slot == 36) { if (h.page > 0) openChecks(p, h.page - 1); return; }
-        if (slot == 44) { openChecks(p, h.page + 1); return; }
-        if (slot == 37) { for (String n : allCheckNames()) checks.set(n, n.endsWith("A")); openChecks(p, h.page); return; }
-        if (slot == 38) { for (String n : allCheckNames()) checks.set(n, true); openChecks(p, h.page); return; }
-        if (slot == 39) { for (String n : allCheckNames()) checks.set(n, false); openChecks(p, h.page); return; }
-        if (slot < 36) {
-            ItemStack it = p.getOpenInventory().getTopInventory().getItem(slot);
-            if (it == null || it.getItemMeta() == null) return;
-            String name = ChatColor.stripColor(it.getItemMeta().getDisplayName());
-            checks.toggle(name);
-            openChecks(p, h.page);
+    private void bypass(Player player, int slot) {
+        if (slot == 49) { openMain(player); return; }
+        UUID id = headId(player, slot);
+        if (id == null) return;
+        if (plugin.bypass().isBypassed(id)) plugin.bypass().removeBypass(id);
+        else plugin.bypass().addBypass(id, plugin.getConfig().getInt("bypass.default-expire-mins", 1440));
+        openBypass(player);
+    }
+
+    private UUID headId(Player viewer, int slot) {
+        ItemStack item = viewer.getOpenInventory().getTopInventory().getItem(slot);
+        if (item == null || item.getType() != Material.PLAYER_HEAD || !(item.getItemMeta() instanceof SkullMeta meta)) return null;
+        OfflinePlayer owner = meta.getOwningPlayer();
+        return owner == null ? null : owner.getUniqueId();
+    }
+
+    private void fill(Inventory inv, Material material) {
+        ItemStack pane = item(material, " ", null);
+        for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, pane);
+    }
+
+    private ItemStack item(Material material, String name, String... lore) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        meta.setDisplayName(Texts.color(name));
+        if (lore != null && lore.length > 0 && lore[0] != null) {
+            List<String> lines = new ArrayList<>();
+            for (String line : lore) if (line != null) lines.add(Texts.color("&7" + line));
+            meta.setLore(lines);
         }
+        item.setItemMeta(meta);
+        return item;
     }
 
-    private void handleBypass(Player p, Holder h, int slot) {
-        if (slot == 49) { openMain(p); return; }
-        if (slot < 45) {
-            ItemStack it = p.getOpenInventory().getTopInventory().getItem(slot);
-            if (it != null && it.getType() == Material.PLAYER_HEAD) {
-                SkullMeta sm = (SkullMeta) it.getItemMeta();
-                OfflinePlayer op = sm.getOwningPlayer();
-                if (op == null) return;
-                boolean on = bypass.isBypassed(op.getUniqueId());
-                if (on) bypass.removeBypass(op.getUniqueId());
-                else bypass.addBypass(op.getUniqueId(), plugin.getConfig().getInt("bypass.default-expire-mins", 1440));
-                openBypass(p);
-            }
+    private ItemStack head(UUID uuid, String name, String... lore) {
+        ItemStack item = new ItemStack(Material.PLAYER_HEAD);
+        SkullMeta meta = (SkullMeta) item.getItemMeta();
+        meta.setOwningPlayer(Bukkit.getOfflinePlayer(uuid));
+        meta.setDisplayName(Texts.color(name));
+        if (lore != null && lore.length > 0 && lore[0] != null) {
+            List<String> lines = new ArrayList<>();
+            for (String line : lore) if (line != null) lines.add(Texts.color("&7" + line));
+            meta.setLore(lines);
         }
+        item.setItemMeta(meta);
+        return item;
     }
 
-    // ========== Helpers ==========
-    private ItemStack simple(Material mat, String name, List<String> lore) {
-        ItemStack it = new ItemStack(mat);
-        ItemMeta im = it.getItemMeta();
-        im.setDisplayName(name);
-        if (lore != null) im.setLore(lore);
-        it.setItemMeta(im);
-        return it;
-    }
-    private List<String> lore(String s) { return Collections.singletonList(gray(s)); }
-    private String gray(String s) { return ChatColor.GRAY + s; }
-
-    private ItemStack playerHead(UUID uuid, String name, double totalVl) {
-        ItemStack it = new ItemStack(Material.PLAYER_HEAD);
-        SkullMeta sm = (SkullMeta) it.getItemMeta();
-        OfflinePlayer op = Bukkit.getOfflinePlayer(uuid);
-        sm.setOwningPlayer(op);
-        sm.setDisplayName(name);
-        sm.setLore(Collections.singletonList(gray("VL: " + String.format(Locale.US, "%.1f", totalVl))));
-        it.setItemMeta(sm);
-        return it;
+    private static String title(String text) {
+        return ChatColor.DARK_AQUA + "AG " + ChatColor.WHITE + text;
     }
 
-    private List<String> allCheckNames() {
-        return Arrays.asList(
-                // Movement
-                "SpeedA","SpeedB","NoSlowA","FlyA","NoFallA","JesusA","StepA","PhaseA",
-                // World
-                "FastPlaceA","FastBreakA","ScaffoldA","TowerA","PlaceReachA","BreakReachA",
-                // Combat (KA lite)
-                "ReachA","WallHitA","AttackCooldownA","AttackIntervalB","AimSnapA","TargetSwitchC",
-                // Misc
-                "AutoClickerA",
-                // AutoTotem
-                "AutoTotemA","AutoTotemB","AutoTotemC"
-        );
+    private static String fmt(double v) {
+        return String.format(Locale.US, "%.1f", v);
+    }
+
+    private void click(Player player) {
+        try {
+            player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.4f, 1.2f);
+        } catch (Throwable ignored) {
+        }
     }
 }

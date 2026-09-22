@@ -1,126 +1,336 @@
-# Кто видит алерты
+# AquaGuard 1.0.0
+# Пороги подобраны с запасом. Экспериментальные чеки выключены, пока их явно не включат в toggles.yml.
+# Живые переключатели (penalties/setback из GUI) пишутся в settings.yml и перекрывают этот файл.
+
+config-version: 4
+
 alerts-permission: "ag.alerts"
-
-# Тихий режим (для будущего, логика сейчас не использует)
 silent-mode: true
-
-# На сколько VL уменьшается каждые N минут (см. ниже таймер в onEnable)
 decay-per-minute: 0.5
+verbose-console: false
 
-# Владелец (без OP). Автопривязка выключится после первого успешного входа нужного ника.
+alerts:
+  console: true
+  sound: true
+  cooldown-ms: 1500
+
+log:
+  enabled: true
+
+history:
+  global: 300
+  per-player: 40
+
+webhook:
+  enabled: false
+  url: ""
+  min-vl: 4
+  cooldown-ms: 2500
+  color: 16744272
+
+gates:
+  cancel-sensitive-checks: true
+  max-ping-ms: 320
+  min-tps: 17.5
+  join-grace-ms: 2000
+  teleport-grace-ms: 900
+
+exempt-worlds: []
+respect-bypass-permission: true
+
+bedrock:
+  speed-extra: 0.08
+  reach-extra: 0.35
+
 owner:
-  uuids: []                # сюда запишется твой UUID после auto-claim
+  uuids: []
   auto-claim:
-    enabled: true          # включено до первого успешного входа
-    name: "ТвойНик"       # замени на свой ник
+    enabled: false
+    name: ""
     require-online-mode: true
   default-bypass: false
 
-# Мягкие наказания (урез урона) — только для PvP
 penalties:
-  mode: "simulate"         # off | simulate | soft | hard
+  mode: "simulate"          # off | simulate | soft | hard
   pvp-only: true
   soft-scale: 0.75
   hard-scale: 0.15
   min-total-vl-soft: 12
-  min-total-vl-hard: 20
-  max-ping-ms: 220
+  min-total-vl-hard: 24
+  max-ping-ms: 250
 
-# Setback (возврат позиции)
 setback:
   enabled: true
-  max-ping-ms: 220
+  max-ping-ms: 280
   cooldown-ms: 400
 
-# Тумблеры чеков (если чек не указан — берётся enabled-by-default)
+freeze:
+  allow-chat: true
+  alert-on-quit: true
+
 checks-toggles:
   enabled-by-default: true
   map: {}
 
-# Персональные обходы по коду/выдаче
 bypass:
   default-expire-mins: 1440
-  codes: []                # сюда можно добавить одноразовые коды
+  codes: []
+
+# Старый per-check кик. 0 = выключен. Новая лестница — punishments ниже, по умолчанию тоже выключена.
+legacy-punish:
+  reason: "Kicked by AquaGuard (%check%)"
+
+punishments:
+  enabled: false
+  mode: log                    # log | execute
+  min-interval-ms: 4000
+  ladder:
+    - min-total-vl: 25
+      commands:
+        - "kick %player% AquaGuard %check% VL %vl%"
+    - min-total-vl: 45
+      commands:
+        - "ban %player% AquaGuard %check% VL %vl%"
 
 checks:
-  # ===== Movement =====
   SpeedA:
-    ground-sprint: 0.36
-    ground-walk: 0.215
-    air-sprint: 0.42
-    air-walk: 0.30
     speed-effect-per-level: 0.06
-    horizontal-margin: 0.05
-    streak-to-flag: 3
+    ground-sprint: 0.40
+    ground-walk: 0.26
+    air-sprint: 0.62
+    air-walk: 0.40
+    horizontal-margin: 0.06
+    streak-to-flag: 4
     add-vl: 1.5
     punish-threshold: 0
     setback: "from"
-
   SpeedB:
     window-ms: 900
-    walk-bps: 4.4
-    sprint-bps: 5.9
-    jump-bps: 7.8
-    margin-bps: 0.50
-    streak-to-flag: 2
+    walk-bps: 5.2
+    sprint-bps: 6.6
+    jump-bps: 8.8
+    margin-bps: 0.80
+    streak-to-flag: 3
+    combat-immunity-ms: 500
     add-vl: 1.5
     punish-threshold: 0
     setback: "from"
-    combat-immunity-ms: 400
-
   FlyA:
-    hover-threshold-ticks: 7
-    streak-to-flag: 3
-    add-vl: 1.0
+    hover-threshold-ticks: 10
+    streak-to-flag: 4
+    add-vl: 1.5
     punish-threshold: 0
     setback: "safe"
-
-  NoFallA:
-    min-fall: 4.0
-    grace-ms: 450
+  FlyB:
+    min-dy: 0.08
+    min-air-ticks: 8
+    streak-to-flag: 4
     add-vl: 2.0
     punish-threshold: 0
     setback: "safe"
-
+  NoFallA:
+    min-fall: 5.5
+    grace-ms: 500
+    add-vl: 2.0
+    punish-threshold: 0
+    setback: "safe"
   JesusA:
-    swim-max-h: 0.30
-    margin: 0.03
-    streak-to-flag: 3
+    swim-max-h: 0.28
+    surface-max-h: 0.40
+    margin: 0.05
+    streak-to-flag: 4
     add-vl: 1.0
     punish-threshold: 0
     setback: "from"
-
+  JesusB:
+    min-h: 0.12
+    streak-to-flag: 4
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "from"
   StepA:
     max-step: 0.6
-    margin: 0.05
-    streak-to-flag: 2
-    add-vl: 1.0
-    punish-threshold: 0
-    setback: "from"
-
-  PhaseA:
-    streak-to-flag: 2
-    add-vl: 2.0
-    punish-threshold: 0
-    setback: "safe"
-
-  NoSlowA:
-    blocking-walk: 0.20
-    margin: 0.05
+    margin: 0.08
     streak-to-flag: 3
     add-vl: 1.0
     punish-threshold: 0
     setback: "from"
-
-  # ===== World =====
-  FastPlaceA:
-    window-ms: 1000
-    cps-limit: 10
-    margin-cps: 1
+  PhaseA:
+    streak-to-flag: 3
+    add-vl: 2.0
+    punish-threshold: 0
+    setback: "safe"
+  NoSlowA:
+    blocking-walk: 0.22
+    margin: 0.06
+    streak-to-flag: 4
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "from"
+  HighJumpA:
+    margin: 0.45
+    streak-to-flag: 2
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "safe"
+  ElytraA:
+    glide-h: 2.8
+    boosted-h: 8.0
+    max-up: 0.18
+    firework-grace-ms: 2500
+    streak-to-flag: 4
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "safe"
+  FastClimbA:
+    max-dy: 0.30
+    streak-to-flag: 4
     add-vl: 1.0
     punish-threshold: 0
     setback: "none"
-
+  NoWebA:
+    max-h: 0.14
+    max-dy: 0.14
+    streak-to-flag: 3
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "from"
+  StrafeA:
+    acc-limit: 0.22
+    margin: 0.04
+    streak-to-flag: 4
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+  StrafeB:
+    angle-deg: 120
+    min-h: 0.22
+    streak-to-flag: 4
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+  StrafeC:
+    air-h: 0.72
+    min-air: 6
+    streak-to-flag: 4
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+  TimerA:
+    max-moves: 28
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+  BlinkA:
+    gap-ms: 500
+    min-distance: 5.0
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "from"
+  SpiderA:
+    streak-to-flag: 6
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "from"
+  BoatFlyA:
+    min-dy: 0.18
+    streak-to-flag: 5
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "none"
+  GroundSpoofA:
+    min-air: 12
+    streak-to-flag: 6
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+  InventoryMoveA:
+    max-h: 0.20
+    streak-to-flag: 5
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
+  VelocityA:
+    min-expected: 0.28
+    taken-ratio: 0.22
+    streak-to-flag: 3
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "none"
+  ReachA:
+    players-only: true
+    base-max: 3.0
+    ping-coeff: 0.004
+    extra-margin: 0.35
+    streak-to-flag: 3
+    add-vl: 1.5
+    punish-threshold: 0
+  ReachB:
+    add-vl: 1.0
+    punish-threshold: 0
+  WallHitA:
+    streak-to-flag: 3
+    add-vl: 1.0
+    punish-threshold: 0
+  HitboxA:
+    max-angle: 42
+    streak-to-flag: 3
+    add-vl: 1.0
+    punish-threshold: 0
+  AutoClickerA:
+    window-ms: 3000
+    cps-limit: 16
+    min-cps: 9
+    max-std-ms: 12
+    max-cv: 0.08
+    streak-to-flag: 2
+    add-vl: 1.0
+    punish-threshold: 0
+  MultiAuraA:
+    window-ms: 800
+    min-targets: 4
+    add-vl: 1.5
+    punish-threshold: 0
+  AttackCooldownA:
+    ratio: 0.45
+    min-ms: 220
+    add-vl: 0.5
+    punish-threshold: 0
+  AttackIntervalB:
+    min-cps: 6
+    max-std-ms: 20
+    max-cv: 0.12
+    add-vl: 0.5
+    punish-threshold: 0
+  AimSnapA:
+    window-ms: 150
+    max-yaw-deg-per-s: 1100
+    cone-after-deg: 10
+    add-vl: 0.5
+    punish-threshold: 0
+  TargetSwitchC:
+    max-ms: 60
+    cone-deg: 8
+    add-vl: 1.0
+    punish-threshold: 0
+  CriticalsA:
+    max-air-ticks: 2
+    max-fall: 0.15
+    streak-to-flag: 4
+    add-vl: 1.0
+    punish-threshold: 0
+  KeepSprintA:
+    kept-ratio: 0.92
+    streak-to-flag: 5
+    add-vl: 0.5
+    punish-threshold: 0
+  FastPlaceA:
+    window-ms: 1000
+    cps-limit: 12
+    margin-cps: 2
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
   FastBreakA:
     window-ms: 1000
     cps-limit: 8
@@ -128,89 +338,103 @@ checks:
     add-vl: 1.0
     punish-threshold: 0
     setback: "none"
-
+  PlaceReachA:
+    margin: 0.45
+    ping-coeff: 0.002
+    max-distance: 5.0
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "from"
+  BreakReachA:
+    margin: 0.50
+    max-distance: 5.0
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "from"
+  AirPlaceA:
+    add-vl: 2.0
+    punish-threshold: 0
+    setback: "from"
+  NukerA:
+    blocks-per-second: 8
+    max-angle: 55
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "none"
+  ImpossibleBreakA:
+    ratio: 0.40
+    min-expected-ms: 350
+    add-vl: 1.5
+    punish-threshold: 0
+    setback: "none"
   ScaffoldA:
-    score-threshold: 6.0
+    score-threshold: 12
     add-vl: 1.5
     punish-threshold: 0
     setback: "from"
-
+  ScaffoldB:
+    max-yaw-delta: 1.5
+    streak-to-flag: 5
+    add-vl: 1.0
+    punish-threshold: 0
+    setback: "none"
   TowerA:
     streak-to-flag: 3
     add-vl: 1.0
     punish-threshold: 0
     setback: "from"
-
-  # (Опционально, если решишь включать расширенные reach на блоках в будущем)
-  PlaceReachA:
-    max-distance: 5.0
-    margin: 0.2
-    add-vl: 1.0
-    punish-threshold: 0
-    setback: "from"
-
-  BreakReachA:
-    max-distance: 5.0
-    margin: 0.2
-    add-vl: 1.0
-    punish-threshold: 0
-    setback: "from"
-
-  # ===== Combat (KA lite) =====
-  ReachA:
-    base-max: 3.2
-    ping-coeff: 0.003
-    extra-margin: 0.25
+  FastBowA:
+    min-force: 0.90
+    bow-min-ms: 700
+    crossbow-min-ms: 200
     add-vl: 1.5
     punish-threshold: 0
-
-  WallHitA:
+  FastEatA:
+    ratio: 0.65
     add-vl: 1.0
     punish-threshold: 0
-
-  AttackCooldownA:
-    min-ms: 220
-    add-vl: 0.5
-    punish-threshold: 0
-
-  AttackIntervalB:
-    min-cps: 6.0
-    max-std-ms: 50.0
-    add-vl: 0.5
-    punish-threshold: 0
-
-  AimSnapA:
-    window-ms: 150
-    max-dyaw: 120.0
-    max-dpitch: 60.0
-    add-vl: 0.5
-    punish-threshold: 0
-
-  TargetSwitchC:
-    max-ms: 70
-    cone-deg: 6.0
+  RegenA:
+    min-interval-ms: 3200
+    streak-to-flag: 3
     add-vl: 1.0
     punish-threshold: 0
-
-  # (Опционально — если подключишь AutoClickerA позже)
-  AutoClickerA:
-    window-ms: 3000
-    cps-limit: 14
+  InvalidPitchA:
+    add-vl: 2.0
+    punish-threshold: 0
+  GhostHandA:
+    min-distance: 2.0
+    streak-to-flag: 3
     add-vl: 1.0
     punish-threshold: 0
-
-  # ===== AutoTotem =====
   AutoTotem:
-    quick-swap-ms: 200
-    low-hp-hearts: 2.0
+    quick-swap-ms: 90
+    low-hp-hearts: 4
     repeat-window-ms: 600000
-    AutoTotemA:
-      add-vl: 1.0
-      punish-threshold: 0
-    AutoTotemB:
-      min-quick-uses: 3
-      add-vl: 1.0
-      punish-threshold: 0
-    AutoTotemC:
-      add-vl: 1.0
-      punish-threshold: 0
+  AutoTotemA:
+    add-vl: 1.0
+    punish-threshold: 0
+  AutoTotemB:
+    min-quick-uses: 4
+    add-vl: 1.0
+    punish-threshold: 0
+  AutoTotemC:
+    add-vl: 1.0
+    punish-threshold: 0
+  ChestStealerA:
+    window-ms: 1000
+    clicks: 16
+    add-vl: 1.0
+    punish-threshold: 0
+  CrystalAuraA:
+    max-ms: 80
+    streak-to-flag: 3
+    add-vl: 1.0
+    punish-threshold: 0
+  IllegalStackA:
+    over: 0
+    add-vl: 2.0
+    punish-threshold: 0
+  IllegalEnchantA:
+    over-max: 0
+    add-vl: 1.5
+    punish-threshold: 0

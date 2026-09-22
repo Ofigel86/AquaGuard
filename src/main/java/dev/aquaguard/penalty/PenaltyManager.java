@@ -1,7 +1,6 @@
 package dev.aquaguard.penalty;
 
 import dev.aquaguard.AquaGuard;
-import dev.aquaguard.core.ViolationManager;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.event.EventHandler;
@@ -9,25 +8,28 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 
-/**
- * Мягкие наказания для PvP (урез урона) по суммарному VL.
- * Режимы: off | simulate | soft | hard
- * - pvp-only: true — действует только игрок -> игрок
- * - max-ping-ms, TPS ворота (TPS проверяется внешними воротами при желании)
- */
-public class PenaltyManager implements Listener {
-    private final AquaGuard plugin;
-    private final ViolationManager vl;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Locale;
 
+/**
+ * Мягкое наказание: урез урона по суммарному VL.
+ * pvp-only=false больше не выключает систему целиком — оно лишь расширяет её на мобов.
+ */
+public final class PenaltyManager implements Listener {
     public enum Mode { OFF, SIMULATE, SOFT, HARD }
 
-    public PenaltyManager(AquaGuard plugin, ViolationManager vl) {
-        this.plugin = plugin; this.vl = vl;
+    private final AquaGuard plugin;
+    private final Map<UUID, Long> simulateNotice = new ConcurrentHashMap<>();
+
+    public PenaltyManager(AquaGuard plugin) {
+        this.plugin = plugin;
     }
 
     public Mode mode() {
-        String m = plugin.getConfig().getString("penalties.mode", "simulate").toLowerCase();
-        return switch (m) {
+        String raw = plugin.settings().penaltiesMode().toLowerCase(Locale.ROOT);
+        return switch (raw) {
             case "off" -> Mode.OFF;
             case "soft" -> Mode.SOFT;
             case "hard" -> Mode.HARD;
@@ -35,48 +37,44 @@ public class PenaltyManager implements Listener {
         };
     }
 
-    public void setMode(Mode m) {
-        plugin.getConfig().set("penalties.mode", m.name().toLowerCase());
-        plugin.saveConfig();
+    public void setMode(Mode mode) {
+        plugin.settings().setPenaltiesMode(mode.name().toLowerCase(Locale.ROOT));
     }
 
-    @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGHEST)
-    public void onDamage(EntityDamageByEntityEvent e) {
-        if (!plugin.getConfig().getBoolean("penalties.pvp-only", true)) return;
-
-        Player attacker = null;
-        if (e.getDamager() instanceof Player p) attacker = p;
-        else if (e.getDamager() instanceof Projectile pr && pr.getShooter() instanceof Player p) attacker = p;
-        if (attacker == null || !(e.getEntity() instanceof Player)) return;
-
-        if (attacker.hasPermission("ag.bypass")) return;
-
-        int maxPing = plugin.getConfig().getInt("penalties.max-ping-ms", 220);
-        try { if (attacker.getPing() > maxPing) return; } catch (Throwable ignored) {}
-
-        double total = vl.total(attacker.getUniqueId());
-        double softMin = plugin.getConfig().getDouble("penalties.min-total-vl-soft", 12.0);
-        double hardMin = plugin.getConfig().getDouble("penalties.min-total-vl-hard", 20.0);
-
-        Mode m = mode();
+    @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGH)
+    public void onDamage(EntityDamageByEntityEvent event) {
+        Mode mode = mode();
+        if (mode == Mode.OFF) return;
+        Player attacker = attacker(event);
+        if (attacker == null) return;
+        boolean pvp = event.getEntity() instanceof Player;
+        if (plugin.getConfig().getBoolean("penalties.pvp-only", true) && !pvp) return;
+        if (plugin.exemption().bypass(attacker)) return;
+        int maxPing = plugin.getConfig().getInt("penalties.max-ping-ms", 250);
+        try {
+            if (attacker.getPing() > maxPing) return;
+        } catch (Throwable ignored) {
+        }
+        double total = plugin.violations().total(attacker.getUniqueId());
+        double softMin = plugin.getConfig().getDouble("penalties.min-total-vl-soft", 12);
+        double hardMin = plugin.getConfig().getDouble("penalties.min-total-vl-hard", 24);
         double soft = plugin.getConfig().getDouble("penalties.soft-scale", 0.75);
         double hard = plugin.getConfig().getDouble("penalties.hard-scale", 0.15);
-
-        boolean shouldSoft = total >= softMin;
         boolean shouldHard = total >= hardMin;
-
-        if (m == Mode.OFF) return;
-
-        if (m == Mode.SIMULATE) {
-            if (shouldHard) attacker.sendMessage("AquaGuard simulate: урон был бы x" + hard);
-            else if (shouldSoft) attacker.sendMessage("AquaGuard simulate: урон был бы x" + soft);
+        boolean shouldSoft = total >= softMin;
+        if (!shouldSoft) return;
+        if (mode == Mode.SIMULATE) {
+            attacker.sendMessage(plugin.messages().format(shouldHard ? "penalty-sim-hard" : "penalty-sim-soft",
+                    "scale", String.format(Locale.US, "%.2f", shouldHard ? hard : soft)));
             return;
         }
+        if (mode == Mode.HARD && shouldHard) event.setDamage(Math.max(0.2, event.getDamage() * hard));
+        else event.setDamage(event.getDamage() * soft);
+    }
 
-        if (m == Mode.HARD && shouldHard) {
-            e.setDamage(Math.max(0.2, e.getDamage() * hard));
-        } else if ((m == Mode.SOFT || m == Mode.HARD) && shouldSoft) {
-            e.setDamage(e.getDamage() * soft);
-        }
+    private static Player attacker(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player player) return player;
+        if (event.getDamager() instanceof Projectile projectile && projectile.getShooter() instanceof Player player) return player;
+        return null;
     }
 }
